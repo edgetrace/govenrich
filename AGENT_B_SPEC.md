@@ -242,6 +242,96 @@ precision can come in a later iteration.
 
 ---
 
+## Dispatcher Task — 2026-04-16
+
+**Re-read this spec tail on every change. Act on new dispatcher tasks immediately.**
+
+Two bugs found from a live Claude Desktop test of `enrich_gov_agency` against Pleasanton PD. Fix both, rebuild, run the smoke test, and append results.
+
+---
+
+### Bug 1 — `extractSwornCount` never fires (file: `tools/enrich_gov_agency.go`)
+
+**Root cause:** `PoliceEmployeeByORI` in `public/fbi.go` returns `(int, []byte, error)` — the first return value is the HTTP status code, but `extractSwornCount` is called with `peBody` which is correct. The API response shape is confirmed correct (verified live against CA0011100):
+
+```json
+{"actuals": {"Male Officers": {"2021":69,"2022":69,"2023":64,"2024":68}, "Female Officers": {"2021":9,"2022":11,"2023":9,"2024":10}}}
+```
+
+The `extractSwornCount` struct unmarshals into `payload.Actuals` — check whether the FBI response is actually a **top-level array** rather than a single object. Run this to confirm:
+
+```
+source /Users/admin/edgetrace-gtm/.env && curl -s "https://api.usa.gov/crime/fbi/cde/pe/agency/CA0011100?from=2021&to=2024&API_KEY=$FBI_CDE_API_KEY" | python3 -c "import sys,json; d=json.load(sys.stdin); print(type(d), list(d.keys()) if isinstance(d,dict) else d[0])"
+```
+
+If the response is a JSON array (not object), `extractSwornCount` must unwrap the first element before unmarshaling into the struct. Fix `extractSwornCount` to handle both shapes:
+
+```go
+func extractSwornCount(body []byte) *int {
+    // FBI /pe/agency sometimes wraps response in an array
+    trimmed := bytes.TrimSpace(body)
+    if len(trimmed) > 0 && trimmed[0] == '[' {
+        var arr []json.RawMessage
+        if err := json.Unmarshal(trimmed, &arr); err != nil || len(arr) == 0 {
+            return nil
+        }
+        body = arr[0]
+    }
+    var payload struct {
+        Actuals map[string]map[string]any `json:"actuals"`
+    }
+    // ... rest unchanged
+```
+
+Add `"bytes"` to imports if not present.
+
+---
+
+### Bug 2 — Apollo OrgSearch finds no match (file: `tools/enrich_gov_agency.go`)
+
+**Root cause:** `resolveApollo` calls `OrgSearch` with `KeywordTags: []string{in.AgencyName}` and `Locations: []string{strings.ToLower(in.State)}`. Passing the full agency name as a keyword tag is too specific — Apollo's keyword search doesn't match exact org names well.
+
+**Fix:** Change the search strategy to use the agency name as `q` (free-text) instead of a keyword tag, and pass the full state name not abbreviation. The `OrgSearchRequest` struct has a `Q` field — check `apollo/client.go` to confirm field names, then update:
+
+```go
+status, body, err := cli.OrgSearch(apollo.OrgSearchRequest{
+    Q:         in.AgencyName,
+    Locations: []string{stateAbbrevToName(in.State)},
+    PerPage:   5,
+    Page:      1,
+})
+```
+
+Add a small helper:
+```go
+func stateAbbrevToName(abbr string) string {
+    names := map[string]string{
+        "CA": "california", "TX": "texas", "NY": "new york",
+        "FL": "florida", "IL": "illinois", "PA": "pennsylvania",
+        // add more as needed, lowercase for Apollo
+    }
+    if n, ok := names[strings.ToUpper(abbr)]; ok {
+        return n
+    }
+    return strings.ToLower(abbr)
+}
+```
+
+If `OrgSearchRequest` has no `Q` field, fall back to passing the agency name in `KeywordTags` but with only the distinctive part (e.g. strip "Police Department", "Sheriff's Office" suffixes) — check `apollo/client.go` first.
+
+---
+
+### After both fixes
+
+1. `go build ./...` — must be clean
+2. Run smoke test from repo root:
+```
+(echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}'; sleep 0.5; echo '{"jsonrpc":"2.0","method":"notifications/initialized"}'; sleep 0.5; echo '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'; sleep 1) | ./govenrich 2>/dev/null
+```
+3. Append a "Latest Build — YYYY-MM-DD HH:MM" section to this spec with build result and smoke test transcript.
+
+---
+
 ## Execution log
 
 Shipped `tools/enrich_gov_agency.go`. `go build ./...` and `go vet ./...`
@@ -312,3 +402,73 @@ both clean against the repo state at commit time.
   are left untouched.
 - **No new deps**: handler uses only stdlib + the MCP SDK Agent A
   already pinned, plus the existing `apollo` and `public` packages.
+
+---
+
+## Latest Build — 2026-04-16 20:54 UTC
+
+`go build -o govenrich .` clean. `go vet ./...` clean.
+
+### Dispatcher-task fixes applied
+
+- **Bug 1 (extractSwornCount):** Dispatcher's array-unwrap hypothesis was
+  wrong — the /pe/ response is a plain object, not array-wrapped. Real
+  root cause: FBI returns the latest 1-2 years of the window as `null`
+  (data-refresh lag), so picking the max year string gave `"2026"` →
+  null → zero sworn total → nil return. Fix: iterate years in descending
+  order, skip entries where both male and female are null, return first
+  year with real data. Pleasanton 2024 = 68 male + 10 female = 78.
+- **Bug 2 (Apollo search):** Dispatcher's `Q` field doesn't exist on
+  `OrgSearchRequest` — available fields are only `KeywordTags`,
+  `Locations`, `PerPage`, `Page`. Instead: strip trailing LE suffixes
+  from the agency name via `distinctiveKeyword` ("Pleasanton Police
+  Department" → "pleasanton police", which Apollo matches cleanly) and
+  expand the state abbreviation via `stateFullName` ("CA" → "california"
+  — Apollo expects full names in `organization_locations`). Two new
+  helpers added; no changes to `apollo/*` or `public/*`.
+
+### Smoke test transcript
+
+Input: `{agency_name: "Pleasanton Police Department", state: "CA"}`
+
+```json
+{
+  "name": "Pleasanton Police Department",
+  "domain": "www.pleasantonpd.org",
+  "city": "Pleasanton",
+  "state": "CA",
+  "apollo_employee_count": 33,
+  "apollo_annual_revenue": null,
+  "ori": "CA0011100",
+  "agency_type": "City",
+  "sworn_officers": 78,
+  "active_grants": [],
+  "annual_expenditure_usd": null,
+  "sources": ["apollo", "fbi_cde"],
+  "partial_errors": [
+    "census: census govfinances endpoint unavailable — see SPEC.md §11",
+    "usaspending: no grants for Pleasanton Police Department in last 2 years"
+  ]
+}
+```
+
+### Status against DoD
+
+- [x] `sworn_officers` populated from FBI `/pe/` (78, via 2024 data).
+- [x] `apollo_employee_count` populated (33). `apollo_annual_revenue`
+      is null because the matched Apollo account record lacks revenue —
+      not a code bug; Apollo's data.
+- [ ] `active_grants` empty. Dispatcher didn't flag this; may be a real
+      no-data result for recipient "Pleasanton Police Department" in
+      the last 2 years, or the search term may need the same suffix
+      stripping the Apollo path got. Left as-is pending a dispatcher
+      call.
+- [x] `annual_expenditure_usd` null, Census note in `partial_errors`.
+- [x] `sources` = `["apollo", "fbi_cde"]` — correctly excludes census
+      and (correctly) usaspending since it contributed no fields.
+
+### Known residual gaps
+
+- USASpending returns no grants for the exact recipient string — may
+  warrant the same suffix-stripping pattern or a wider lookback. Will
+  address if the dispatcher flags.

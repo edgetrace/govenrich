@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -149,10 +150,15 @@ func resolveApollo(
 	addSource func(string),
 	addErr func(string),
 ) {
+	// Apollo's keyword-tag search matches poorly on the full agency name
+	// ("Pleasanton Police Department" → 0 hits) but cleanly on a distinctive
+	// prefix ("pleasanton police" → 3 hits). Strip trailing LE suffixes and
+	// expand the state abbreviation — Apollo expects full state names in
+	// organization_locations.
 	status, body, err := cli.OrgSearch(apollo.OrgSearchRequest{
-		KeywordTags: []string{in.AgencyName},
-		Locations:   []string{strings.ToLower(in.State)},
-		PerPage:     3,
+		KeywordTags: []string{distinctiveKeyword(in.AgencyName)},
+		Locations:   []string{stateFullName(in.State)},
+		PerPage:     5,
 		Page:        1,
 	})
 	if err != nil {
@@ -485,18 +491,19 @@ func normalizeAgencyName(s string) string {
 }
 
 // extractSwornCount reads the sworn-officer count from a /pe/agency/{ori}
-// response. The authoritative shape (verified by Agent A against
-// CA0011100 = Pleasanton PD) is:
+// response. The authoritative shape (verified against CA0011100 =
+// Pleasanton PD):
 //
 //	{"actuals": {
-//	   "Male Officers":   {"2020": 69, "2021": 69, "2022": 69, "2023": 64},
-//	   "Female Officers": {"2020": 9,  "2021": 9,  "2022": 11, "2023": 9},
+//	   "Male Officers":   {"2022": 69, "2023": 64, "2024": 68, "2025": null, "2026": null},
+//	   "Female Officers": {"2022": 11, "2023": 9,  "2024": 10, "2025": null, "2026": null},
 //	   "Male Civilians":  {...},  // NOT sworn — must be excluded
 //	   "Female Civilians":{...},  // NOT sworn — must be excluded
 //	 }, ...}
 //
-// Sworn total = Male Officers[year] + Female Officers[year] for the most
-// recent year present in either map.
+// FBI's refresh lag means the most recent years in the window are often
+// `null`. We scan years in descending order and return the first year
+// where either officer count has real data.
 func extractSwornCount(body []byte) *int {
 	var payload struct {
 		Actuals map[string]map[string]any `json:"actuals"`
@@ -510,34 +517,39 @@ func extractSwornCount(body []byte) *int {
 		return nil
 	}
 
-	latestYear := ""
+	// Collect the union of year keys across both maps so one-sided data
+	// still surfaces.
+	yearSet := make(map[string]struct{}, len(male)+len(female))
 	for y := range male {
-		if y > latestYear {
-			latestYear = y
-		}
+		yearSet[y] = struct{}{}
 	}
 	for y := range female {
-		if y > latestYear {
-			latestYear = y
+		yearSet[y] = struct{}{}
+	}
+	years := make([]string, 0, len(yearSet))
+	for y := range yearSet {
+		years = append(years, y)
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(years))) // "2026" > "2025" ... lexical works for 4-digit years
+
+	for _, y := range years {
+		m := intPtr(male[y])
+		f := intPtr(female[y])
+		if m == nil && f == nil {
+			continue // both null — FBI hasn't refreshed this year yet
+		}
+		total := 0
+		if m != nil {
+			total += *m
+		}
+		if f != nil {
+			total += *f
+		}
+		if total > 0 {
+			return &total
 		}
 	}
-	if latestYear == "" {
-		return nil
-	}
-
-	total := 0
-	if n := intPtr(male[latestYear]); n != nil {
-		total += *n
-	}
-	if n := intPtr(female[latestYear]); n != nil {
-		total += *n
-	}
-	if total == 0 {
-		// A year key existed but both officer counts were zero or missing —
-		// treat that as no-data rather than claim a zero sworn force.
-		return nil
-	}
-	return &total
+	return nil
 }
 
 // firstMatch returns the first record found across the named top-level arrays
@@ -616,4 +628,48 @@ func stateFIPS(abbr string) string {
 		"DC": "11",
 	}
 	return m[strings.ToUpper(strings.TrimSpace(abbr))]
+}
+
+// stateFullName converts a USPS two-letter abbr to Apollo's expected
+// organization_locations value (full lowercase state name). Falls back to
+// the lowercased input so unknown codes still search something.
+func stateFullName(abbr string) string {
+	m := map[string]string{
+		"AL": "alabama", "AK": "alaska", "AZ": "arizona", "AR": "arkansas",
+		"CA": "california", "CO": "colorado", "CT": "connecticut",
+		"DE": "delaware", "FL": "florida", "GA": "georgia", "HI": "hawaii",
+		"ID": "idaho", "IL": "illinois", "IN": "indiana", "IA": "iowa",
+		"KS": "kansas", "KY": "kentucky", "LA": "louisiana", "ME": "maine",
+		"MD": "maryland", "MA": "massachusetts", "MI": "michigan",
+		"MN": "minnesota", "MS": "mississippi", "MO": "missouri",
+		"MT": "montana", "NE": "nebraska", "NV": "nevada",
+		"NH": "new hampshire", "NJ": "new jersey", "NM": "new mexico",
+		"NY": "new york", "NC": "north carolina", "ND": "north dakota",
+		"OH": "ohio", "OK": "oklahoma", "OR": "oregon", "PA": "pennsylvania",
+		"RI": "rhode island", "SC": "south carolina", "SD": "south dakota",
+		"TN": "tennessee", "TX": "texas", "UT": "utah", "VT": "vermont",
+		"VA": "virginia", "WA": "washington", "WV": "west virginia",
+		"WI": "wisconsin", "WY": "wyoming", "DC": "district of columbia",
+	}
+	if n, ok := m[strings.ToUpper(strings.TrimSpace(abbr))]; ok {
+		return n
+	}
+	return strings.ToLower(strings.TrimSpace(abbr))
+}
+
+// distinctiveKeyword strips trailing organizational suffixes from an agency
+// name so Apollo's keyword-tag search matches. Apollo returns 0 hits for
+// "Pleasanton Police Department" but 3 hits for "pleasanton police" — the
+// "Department"/"Office"/etc. suffix poisons the phrase match.
+func distinctiveKeyword(name string) string {
+	tokens := strings.Fields(strings.ToLower(strings.TrimSpace(name)))
+	stop := map[string]bool{
+		"department": true, "dept": true, "dept.": true,
+		"office": true, "services": true, "service": true,
+		"bureau": true, "division": true, "agency": true,
+	}
+	for len(tokens) > 2 && stop[tokens[len(tokens)-1]] {
+		tokens = tokens[:len(tokens)-1]
+	}
+	return strings.Join(tokens, " ")
 }
