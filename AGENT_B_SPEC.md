@@ -242,6 +242,55 @@ precision can come in a later iteration.
 
 ---
 
+## Dispatcher Task 2 — 2026-04-16
+
+**Re-read this spec tail on every change. Act on new dispatcher tasks immediately.**
+
+### USASpending redundant search strategy
+
+The current single-pass `recipient_search_text: [AgencyName]` finds nothing for most agencies because federal grants go to the parent city/county, not the named department. Replace with a **three-tier waterfall** — each tier runs only if the previous returned zero results. All tiers search a 5-year window (not 2) ending today.
+
+**Tier 1 — exact department name**
+`recipient_search_text: [AgencyName]` — e.g. `"Pleasanton Police Department"`
+
+**Tier 2 — city/county name extracted from AgencyName**
+Strip known suffixes (`Police Department`, `Sheriff's Office`, `Sheriff Office`, `Police Dept`, `Sheriff Dept`, `Department of Public Safety`, `Public Safety`) from AgencyName to get the bare city/county token.
+`recipient_search_text: ["<city token>"]` — e.g. `"Pleasanton"`
+
+**Tier 3 — city token + state filter only (broadest)**
+Same city token but drop `place_of_performance_locations` constraint and rely on state alone via `recipient_search_text`. Only use if tiers 1 and 2 both return zero. Cap results at 5 to avoid noise.
+
+**Labeling:** Add a `grant_search_tier` int field to `GrantSummary` (1, 2, or 3) so the caller knows the provenance. Tier 2+ results should note in `PartialErrors` (not as an error, as a note): `"usaspending: grants are city-level (no department-direct awards found)"`.
+
+**Time window:** Expand from 2 years to 5 years. Today's date for the end boundary.
+
+**Implementation notes:**
+- Extract the city token with a simple strings replacer — no regex needed. Order matters: try longest suffix first.
+- All three tiers share the same `place_of_performance_locations: [{"country":"USA","state":State}]` for tiers 1 and 2. Tier 3 omits it.
+- If all three tiers return zero, `active_grants` stays `[]` and append `"usaspending: no grants found after 3-tier search"` to `PartialErrors`.
+
+**Also add `grant_search_tier` to `GrantSummary`:**
+```go
+type GrantSummary struct {
+    AwardID        string  `json:"award_id"`
+    RecipientName  string  `json:"recipient_name"`
+    AmountUSD      float64 `json:"amount_usd"`
+    AwardingAgency string  `json:"awarding_agency"`
+    SearchTier     int     `json:"search_tier"` // 1=exact dept, 2=city name, 3=broad
+}
+```
+
+### After fix
+
+1. `go build ./...` — must be clean
+2. Smoke test:
+```
+(echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}'; sleep 0.5; echo '{"jsonrpc":"2.0","method":"notifications/initialized"}'; sleep 0.5; echo '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'; sleep 1) | ./govenrich 2>/dev/null
+```
+3. Append "Latest Build — YYYY-MM-DD HH:MM" to this spec with build result + smoke test transcript.
+
+---
+
 ## Dispatcher Task — 2026-04-16
 
 **Re-read this spec tail on every change. Act on new dispatcher tasks immediately.**
@@ -472,3 +521,81 @@ Input: `{agency_name: "Pleasanton Police Department", state: "CA"}`
 - USASpending returns no grants for the exact recipient string — may
   warrant the same suffix-stripping pattern or a wider lookback. Will
   address if the dispatcher flags.
+
+---
+
+## Latest Build — 2026-04-16 21:00 UTC
+
+`go build -o govenrich .` clean. `go vet ./...` clean.
+
+### Dispatcher Task 2 — 3-tier USASpending waterfall
+
+- `GrantSummary` gains `SearchTier int` (`search_tier` on the wire) so
+  the caller can distinguish a department-direct award (tier 1) from a
+  city-level inherited budget (tier 2+).
+- `cityTokenFromAgencyName` added — strips longest-first suffixes
+  ("Department of Public Safety", "Sheriff's Office", "Police
+  Department", "Public Safety", etc.) and returns the bare city/county
+  token. Order matters: longest suffixes listed first so
+  "Department of Public Safety" peels before "Public Safety" can
+  partial-match.
+- `resolveUSASpending` rewritten as a waterfall over 5-year window:
+  1. Tier 1 — exact `AgencyName`, state geo filter.
+  2. Tier 2 — city token, state geo filter. Skipped if the city token
+     equals the input (stripping was a no-op — tier 1 already covered).
+  3. Tier 3 — city token, no geo filter. Broadest.
+- Hits at tier 2 or 3 append `"usaspending: grants are city-level (no
+  department-direct awards found)"` to `PartialErrors` (a note, per
+  the dispatcher — same channel, different meaning).
+- All three tiers empty → `"usaspending: no grants found after 3-tier
+  search"` lands in `PartialErrors`, `active_grants` stays `[]`.
+- `usaSpendingSearch` helper factored out so each tier is a one-line
+  request construction plus a call into shared parse logic.
+
+### Smoke test transcript
+
+Input: `{agency_name: "Pleasanton Police Department", state: "CA"}`
+
+```json
+{
+  "name": "Pleasanton Police Department",
+  "domain": "www.pleasantonpd.org",
+  "city": "Pleasanton",
+  "state": "CA",
+  "apollo_employee_count": 33,
+  "apollo_annual_revenue": null,
+  "ori": "CA0011100",
+  "agency_type": "City",
+  "sworn_officers": 78,
+  "active_grants": [
+    { "award_id": "EMW-2024-FG-02986", "recipient_name": "LIVERMORE PLEASANTON FIRE DEPARTMENT", "amount_usd": 472006.36, "awarding_agency": "Department of Homeland Security", "search_tier": 2 },
+    { "award_id": "B-25-MC-06-0050",   "recipient_name": "CITY OF PLEASANTON",                  "amount_usd": 381455,    "awarding_agency": "Department of Housing and Urban Development", "search_tier": 2 },
+    { "award_id": "B-23-MC-06-0050",   "recipient_name": "CITY OF PLEASANTON",                  "amount_usd": 380348,    "awarding_agency": "Department of Housing and Urban Development", "search_tier": 2 },
+    { "award_id": "B-24-MC-06-0050",   "recipient_name": "CITY OF PLEASANTON",                  "amount_usd": 380083,    "awarding_agency": "Department of Housing and Urban Development", "search_tier": 2 },
+    { "award_id": "B-21-MC-06-0050",   "recipient_name": "CITY OF PLEASANTON",                  "amount_usd": 368034,    "awarding_agency": "Department of Housing and Urban Development", "search_tier": 2 }
+  ],
+  "annual_expenditure_usd": null,
+  "sources": ["apollo", "usaspending", "fbi_cde"],
+  "partial_errors": [
+    "census: census govfinances endpoint unavailable — see SPEC.md §11",
+    "usaspending: grants are city-level (no department-direct awards found)"
+  ]
+}
+```
+
+Pleasanton PD hits tier 2: ~$2M in city-level HUD and DHS awards over
+the 5-year window. All grants tagged `search_tier: 2`; the note lands
+in `partial_errors`. Tier 1 (the exact department name) correctly
+returned zero, matching the prior build's signal.
+
+### Status against DoD
+
+- [x] `sworn_officers = 78` (FBI).
+- [x] `apollo_employee_count = 33` (Apollo).
+- [x] `active_grants` populated (5 entries, tier 2) — the previous
+      gap is closed.
+- [x] `annual_expenditure_usd` null + Census unavailable note.
+- [x] `sources` now contains `"apollo"`, `"usaspending"`, `"fbi_cde"`
+      and never `"census"`.
+- [x] City-level provenance surfaced via both `search_tier` on each
+      grant and the note in `partial_errors`.

@@ -62,6 +62,11 @@ type GrantSummary struct {
 	RecipientName  string  `json:"recipient_name"`
 	AmountUSD      float64 `json:"amount_usd"`
 	AwardingAgency string  `json:"awarding_agency"`
+	// SearchTier records how we found the grant: 1 = exact department
+	// name, 2 = city/county token with state geo filter, 3 = city token
+	// without geo filter. Tiers 2 and 3 indicate "city-level" awards
+	// where the agency inherits budget through its parent jurisdiction.
+	SearchTier int `json:"search_tier"`
 }
 
 // ---------------------------------------------------------------------------
@@ -326,9 +331,19 @@ func resolveFBI(
 	mu.Unlock()
 }
 
-// resolveUSASpending queries recent federal grants whose recipient name
-// contains the agency. An active award is a warm signal for adjacent tech
-// spend, which matters to the ICP story.
+// resolveUSASpending queries federal grants in a three-tier waterfall
+// over a 5-year trailing window. Most LE agencies receive zero
+// department-direct awards — the money flows to the parent city/county —
+// so a single pass on the exact agency name misses the signal. Each tier
+// runs only if the previous returned nothing.
+//
+//	Tier 1: recipient = AgencyName, state geo filter              (e.g. "Pleasanton Police Department")
+//	Tier 2: recipient = city/county token, state geo filter        (e.g. "Pleasanton")
+//	Tier 3: recipient = city/county token, no geo filter (broadest)
+//
+// Hits at tier 2+ are noted in PartialErrors so the caller can tell a
+// "department-direct" signal from a "city-level inherited budget"
+// signal — they have different meanings for outreach.
 func resolveUSASpending(
 	_ context.Context,
 	cli *public.USASpendingClient,
@@ -339,17 +354,18 @@ func resolveUSASpending(
 	mu *sync.Mutex,
 ) {
 	end := time.Now()
-	start := end.AddDate(-2, 0, 0)
+	start := end.AddDate(-5, 0, 0)
+	startStr, endStr := start.Format("2006-01-02"), end.Format("2006-01-02")
+	stateUpper := strings.ToUpper(strings.TrimSpace(in.State))
 
-	status, body, err := cli.SpendingByAward(public.USASpendingRequest{
+	baseReq := public.USASpendingRequest{
 		Filters: public.USASpendingFilters{
-			AwardTypeCodes:      []string{"02", "03", "04", "05"},
-			RecipientSearchText: []string{in.AgencyName},
+			AwardTypeCodes: []string{"02", "03", "04", "05"},
 			TimePeriod: []public.USASpendingTimePeriod{
-				{StartDate: start.Format("2006-01-02"), EndDate: end.Format("2006-01-02")},
+				{StartDate: startStr, EndDate: endStr},
 			},
 			PlaceOfPerformanceLocations: []map[string]string{
-				{"country": "USA", "state": strings.ToUpper(in.State)},
+				{"country": "USA", "state": stateUpper},
 			},
 		},
 		Fields: []string{"Award ID", "Recipient Name", "Award Amount", "Awarding Agency"},
@@ -357,28 +373,80 @@ func resolveUSASpending(
 		Limit:  5,
 		Sort:   "Award Amount",
 		Order:  "desc",
-	})
+	}
+
+	cityToken := cityTokenFromAgencyName(in.AgencyName)
+	cityLevelNote := "usaspending: grants are city-level (no department-direct awards found)"
+
+	// Tier 1 — exact department name.
+	t1 := baseReq
+	t1.Filters.RecipientSearchText = []string{in.AgencyName}
+	grants, err := usaSpendingSearch(cli, t1, 1)
 	if err != nil {
-		addErr("usaspending: " + err.Error())
+		addErr("usaspending tier1: " + err.Error())
 		return
+	}
+
+	// Tier 2 — city token with geo filter. Skip if the city token equals
+	// the original (stripping produced nothing) — the request would just
+	// duplicate tier 1.
+	if len(grants) == 0 && cityToken != "" && !strings.EqualFold(cityToken, in.AgencyName) {
+		t2 := baseReq
+		t2.Filters.RecipientSearchText = []string{cityToken}
+		g2, err := usaSpendingSearch(cli, t2, 2)
+		if err != nil {
+			addErr("usaspending tier2: " + err.Error())
+		} else if len(g2) > 0 {
+			grants = g2
+			addErr(cityLevelNote)
+		}
+	}
+
+	// Tier 3 — city token, no geo filter. Broadest net.
+	if len(grants) == 0 && cityToken != "" {
+		t3 := baseReq
+		t3.Filters.RecipientSearchText = []string{cityToken}
+		t3.Filters.PlaceOfPerformanceLocations = nil
+		g3, err := usaSpendingSearch(cli, t3, 3)
+		if err != nil {
+			addErr("usaspending tier3: " + err.Error())
+		} else if len(g3) > 0 {
+			grants = g3
+			addErr(cityLevelNote)
+		}
+	}
+
+	if len(grants) == 0 {
+		addErr("usaspending: no grants found after 3-tier search")
+		return
+	}
+
+	mu.Lock()
+	out.ActiveGrants = grants
+	mu.Unlock()
+	addSource("usaspending")
+}
+
+// usaSpendingSearch runs one tier of the waterfall — issues the request,
+// parses results, and stamps SearchTier on every GrantSummary.
+func usaSpendingSearch(
+	cli *public.USASpendingClient,
+	req public.USASpendingRequest,
+	tier int,
+) ([]GrantSummary, error) {
+	status, body, err := cli.SpendingByAward(req)
+	if err != nil {
+		return nil, err
 	}
 	if status != 200 {
-		addErr(fmt.Sprintf("usaspending: HTTP %d", status))
-		return
+		return nil, fmt.Errorf("HTTP %d", status)
 	}
-
 	var payload map[string]any
 	if jerr := json.Unmarshal(body, &payload); jerr != nil {
-		addErr("usaspending parse: " + jerr.Error())
-		return
+		return nil, fmt.Errorf("parse: %w", jerr)
 	}
 	rawResults, _ := payload["results"].([]any)
-	if len(rawResults) == 0 {
-		addErr("usaspending: no grants for " + in.AgencyName + " in last 2 years")
-		return
-	}
-
-	grants := make([]GrantSummary, 0, len(rawResults))
+	out := make([]GrantSummary, 0, len(rawResults))
 	for _, r := range rawResults {
 		rec, ok := r.(map[string]any)
 		if !ok {
@@ -388,21 +456,14 @@ func resolveUSASpending(
 			AwardID:        strField(rec, "Award ID"),
 			RecipientName:  strField(rec, "Recipient Name"),
 			AwardingAgency: strField(rec, "Awarding Agency"),
+			SearchTier:     tier,
 		}
 		if f, ok := rec["Award Amount"].(float64); ok {
 			g.AmountUSD = f
 		}
-		grants = append(grants, g)
+		out = append(out, g)
 	}
-	if len(grants) == 0 {
-		addErr("usaspending: results present but none parseable")
-		return
-	}
-
-	mu.Lock()
-	out.ActiveGrants = grants
-	mu.Unlock()
-	addSource("usaspending")
+	return out, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -672,4 +733,36 @@ func distinctiveKeyword(name string) string {
 		tokens = tokens[:len(tokens)-1]
 	}
 	return strings.Join(tokens, " ")
+}
+
+// cityTokenFromAgencyName strips known LE/public-safety suffixes from an
+// agency name, leaving the bare city/county token. Used by the USASpending
+// tier-2/3 fallbacks — federal grants typically land with the parent
+// jurisdiction, not the named department. Longest suffixes first so
+// "Department of Public Safety" is stripped before "Public Safety" can
+// partial-match something that already matched.
+func cityTokenFromAgencyName(name string) string {
+	s := strings.TrimSpace(name)
+	suffixes := []string{
+		"Department of Public Safety",
+		"Sheriff's Department",
+		"Sheriff's Office",
+		"Police Department",
+		"Sheriff Office",
+		"Sheriff Department",
+		"Public Safety",
+		"Police Dept",
+		"Sheriff Dept",
+	}
+	lower := strings.ToLower(s)
+	for _, suf := range suffixes {
+		ls := strings.ToLower(suf)
+		if strings.HasSuffix(lower, " "+ls) {
+			return strings.TrimSpace(s[:len(s)-len(suf)-1])
+		}
+		if lower == ls {
+			return ""
+		}
+	}
+	return s
 }
