@@ -44,7 +44,7 @@ govenrich/
 ├── .env.example
 │
 ├── apollo/
-│   └── client.go              # Apollo HTTP client, all 7 endpoint calls
+│   └── client.go              # Apollo HTTP client, all 8 endpoint calls
 │
 ├── public/
 │   ├── usaspending.go         # USASpending.gov grant search

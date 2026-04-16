@@ -46,7 +46,7 @@ func main() {
 		fatal("FBI_CDE_API_KEY missing — free key at https://api.data.gov/signup")
 	}
 
-	fmt.Println("govenrich hello-world — steps 2, 3, 5, 7 consume Apollo credits.")
+	fmt.Println("govenrich hello-world — steps 2, 3, 5 consume Apollo credits; 7 and 8 require a master API key.")
 	fmt.Println()
 
 	ap := apollo.New(apolloKey, os.Getenv("APOLLO_BASE_URL"))
