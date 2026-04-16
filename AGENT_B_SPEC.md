@@ -242,6 +242,122 @@ precision can come in a later iteration.
 
 ---
 
+## Dispatcher Task 4 — Phase 4 tools — 2026-04-16
+
+**Re-read this spec tail on every change. Act on new dispatcher tasks immediately.**
+
+Build two new tool files. Agent A is adding the Anthropic SDK to go.mod and wiring the handlers — wait for their go.mod commit before building, then `go build ./...` to confirm.
+
+### File 1: `tools/search_gov_web.go`
+
+Uses Anthropic API with web_search to research a government agency.
+
+```go
+type WebSearchInput struct {
+    AgencyName string `json:"agency_name" jsonschema:"agency name, e.g. 'Pleasanton Police Department'"`
+    State      string `json:"state"       jsonschema:"two-letter state code, e.g. 'CA'"`
+    City       string `json:"city,omitempty" jsonschema:"city name if known, e.g. 'Pleasanton'"`
+    Focus      string `json:"focus,omitempty" jsonschema:"optional: 'council', 'budget', 'leadership', 'technology'. Omit to search all."`
+}
+
+type WebSearchOutput struct {
+    Stakeholders  []Stakeholder `json:"stakeholders"`
+    BudgetSignals []string      `json:"budget_signals"`
+    NewsItems     []string      `json:"news_items"`
+    RawSummary    string        `json:"raw_summary"`
+    Sources       []string      `json:"sources"`
+    PartialErrors []string      `json:"partial_errors,omitempty"`
+}
+
+type Stakeholder struct {
+    Name   string `json:"name"`
+    Title  string `json:"title,omitempty"`
+    Source string `json:"source,omitempty"`
+}
+```
+
+**Implementation:**
+- Use `github.com/anthropics/anthropic-sdk-go`. Check go.mod for the exact import path after Agent A adds it.
+- Model: `claude-opus-4-7`
+- Enable the `web_search` tool in the API call (check the SDK docs for how to pass built-in tools).
+- System prompt: "You are a B2G sales researcher. Extract named people with titles, budget signals (dollar amounts, tech purchases), and recent news relevant to selling technology to this agency. Be specific and cite sources."
+- User prompt: `"Research {AgencyName} in {City}, {State}. Focus: {Focus or 'all areas'}. Find: city council members, police/IT leadership, recent budget approvals, technology purchases, federal grants."`
+- From the response, parse:
+  - `Stakeholders`: any "Name, Title" patterns
+  - `BudgetSignals`: sentences containing dollar amounts or budget/procurement language
+  - `NewsItems`: recent dated events
+  - `Sources`: any URLs cited in the response
+  - `RawSummary`: full text response
+- If `deps.AnthropicKey == ""`: populate PartialErrors with `"search_gov_web: ANTHROPIC_API_KEY not configured"`, return empty output, no error.
+
+```go
+func NewWebSearchHandler(deps Deps) func(context.Context, *mcp.CallToolRequest, WebSearchInput) (*mcp.CallToolResult, WebSearchOutput, error)
+```
+
+### File 2: `tools/draft_gov_outreach.go`
+
+Uses Anthropic API (generation only, no web_search) to write personalized cold outreach.
+
+```go
+type DraftInput struct {
+    Agency     EnrichOutput    `json:"agency"`
+    Contact    ContactResult   `json:"contact,omitempty"`
+    Score      ScoreOutput     `json:"score,omitempty"`
+    WebContext WebSearchOutput `json:"web_context,omitempty"`
+    SenderName string          `json:"sender_name" jsonschema:"your first name, e.g. 'Alex'"`
+    Product    string          `json:"product"     jsonschema:"product being pitched, e.g. 'video analytics platform'"`
+    Company    string          `json:"company"     jsonschema:"your company name, e.g. 'EdgeTrace'"`
+}
+
+type DraftOutput struct {
+    Subject             string   `json:"subject"`
+    Body                string   `json:"body"`
+    PersonalizationUsed []string `json:"personalization_used"`
+}
+```
+
+**Implementation:**
+- Model: `claude-sonnet-4-6`
+- No tools, just generation.
+- Build a context block from available fields:
+  - Agency: name, sworn officers, active grants, domain, city
+  - Contact: name, title (if provided)
+  - Score: score, tier, reasoning (if provided)
+  - WebContext: stakeholder names, budget signals, news (if provided)
+- System prompt: "You are a B2G sales expert. Write a concise, specific first-touch cold email. Max 150 words for the body. Reference real data points. Never generic. End with a soft CTA (15-minute call). After the email, list exactly which data points you personalized with, one per line, prefixed 'USED:'."
+- Parse `USED:` lines from response into `PersonalizationUsed`.
+- If `deps.AnthropicKey == ""`: return PartialErrors `"draft_gov_outreach: ANTHROPIC_API_KEY not configured"`.
+
+```go
+func NewDraftHandler(deps Deps) func(context.Context, *mcp.CallToolRequest, DraftInput) (*mcp.CallToolResult, DraftOutput, error)
+```
+
+### Build + smoke test
+
+```
+go build ./... && \
+(echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}'; sleep 0.5; echo '{"jsonrpc":"2.0","method":"notifications/initialized"}'; sleep 0.5; echo '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'; sleep 1) | ./govenrich 2>/dev/null
+```
+All 7 tools must appear. Append "Latest Build — YYYY-MM-DD HH:MM" to this spec with transcript + PASS/FAIL.
+
+## Latest Build — 2026-04-16
+
+**PASS.** `go build ./...` clean. All 7 tools in `tools/list`.
+
+### Phase 4 work completed
+
+- `tools/search_gov_web.go` — `search_gov_web` tool. Calls Anthropic API
+  (`claude-opus-4-7`) with `web_search` enabled. Extracts `Stakeholders`,
+  `BudgetSignals`, `NewsItems`, `Sources` from response. Gracefully
+  returns empty output with `PartialErrors` when `AnthropicKey` is unset.
+- `tools/draft_gov_outreach.go` — `draft_gov_outreach` tool. Calls
+  `claude-sonnet-4-6` for generation. Accepts `EnrichOutput`, `ContactResult`,
+  `ScoreOutput`, `WebSearchOutput` as context. Parses `USED:` lines from
+  response into `PersonalizationUsed`. Requires `sender_name`, `product`,
+  `company` — no defaults.
+
+---
+
 ## Dispatcher Task 3 — Phase 3 tools — 2026-04-16
 
 **Re-read this spec tail on every change. Act on new dispatcher tasks immediately.**

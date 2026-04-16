@@ -1,22 +1,14 @@
 // find_gov_contacts.go — look up LE-leadership contacts for an agency via
-// Apollo PeopleSearch, with optional email reveal via PeopleMatch.
-//
-// Note on OrganizationDomains: AGENT_B_SPEC.md Dispatcher Task 3 asks
-// Agent A to add an OrganizationDomains field to
-// apollo.PeopleSearchRequest. At time of writing this file that field
-// does NOT exist — PeopleSearchRequest has only Titles, Seniorities,
-// Locations, PerPage, Page. This handler therefore uses the title +
-// state filter only, and (if Domain is provided) narrows the returned
-// list client-side by matching Domain against the Apollo person's
-// organization.website_url. When Agent A lands the field, swap the
-// client-side filter for a server-side filter at the marked TODO.
+// Apollo PeopleSearch, with optional email reveal via PeopleMatch. When a
+// known domain is passed in, Apollo filters server-side via
+// OrganizationDomains; otherwise the title + state filter is used
+// unchanged.
 package tools
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"sync"
 
 	"github.com/edgetrace/govenrich/apollo"
@@ -112,9 +104,9 @@ func NewContactsHandler(deps Deps) func(
 			PerPage:   limit,
 			Page:      1,
 		}
-		// TODO(agent-a): once apollo.PeopleSearchRequest gains
-		// OrganizationDomains, filter server-side:
-		//   if in.Domain != "" { req.OrganizationDomains = []string{cleanDomain(in.Domain)} }
+		if in.Domain != "" {
+			req.OrganizationDomains = []string{cleanDomain(in.Domain)}
+		}
 
 		status, body, err := deps.Apollo.PeopleSearch(req)
 		if err != nil {
@@ -130,23 +122,6 @@ func NewContactsHandler(deps Deps) func(
 		if len(contacts) == 0 {
 			out.PartialErrors = append(out.PartialErrors, "apollo people_search: no contacts matched")
 			return nil, out, nil
-		}
-
-		// Client-side domain filter stand-in until OrganizationDomains ships.
-		if in.Domain != "" {
-			wantDomain := cleanDomain(in.Domain)
-			filtered := contacts[:0]
-			for _, c := range contacts {
-				if matchesDomain(c.Organization, wantDomain) {
-					filtered = append(filtered, c)
-				}
-			}
-			if len(filtered) > 0 {
-				contacts = filtered
-			} else {
-				out.PartialErrors = append(out.PartialErrors,
-					"apollo: no contacts matched domain filter client-side (OrganizationDomains field not yet in PeopleSearchRequest)")
-			}
 		}
 
 		if len(contacts) > limit {
@@ -197,27 +172,6 @@ func parsePeople(body []byte) []ContactResult {
 		out = append(out, cr)
 	}
 	return out
-}
-
-// matchesDomain returns true when the person's organization appears to be
-// the domain we care about. Used only for the client-side filter stand-in
-// documented at the top of this file.
-func matchesDomain(orgName, wantDomain string) bool {
-	if orgName == "" {
-		return false
-	}
-	// People search doesn't return the org website, so we fall back to
-	// a token match on the org name (e.g. "Pleasanton Police Department"
-	// vs want "pleasantonpd.org" → check for "pleasanton" in both).
-	wantToken := strings.TrimSuffix(wantDomain, ".org")
-	wantToken = strings.TrimSuffix(wantToken, ".gov")
-	wantToken = strings.TrimSuffix(wantToken, ".com")
-	wantToken = strings.TrimPrefix(wantToken, "www.")
-	// Use first 6+ chars as a coarse match.
-	if len(wantToken) < 4 {
-		return true
-	}
-	return strings.Contains(strings.ToLower(orgName), wantToken[:min(len(wantToken), 10)])
 }
 
 // arrayFieldFromBody unmarshals a top-level JSON object and pulls the named

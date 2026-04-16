@@ -217,6 +217,77 @@ rm -rf stub demo/claude_desktop_config.example.json
 than 20 minutes, stop and report what's blocking — Agent A will hit the
 same wall and needs to know.
 
+## Dispatcher Task 2 — Phase 4 — 2026-04-16
+
+**Re-read this spec tail on every change. Act on new dispatcher tasks immediately.**
+
+Build one new file: `tools/create_apollo_sequence.go`.
+
+This tool automates the final step of the GTM pipeline — creates an Apollo contact from enriched people data and enrolls them in an outreach sequence.
+
+```go
+type SequenceInput struct {
+    Contact    ContactResult `json:"contact"      jsonschema:"contact from find_gov_contacts"`
+    SequenceID string        `json:"sequence_id"  jsonschema:"Apollo sequence/campaign ID, e.g. from your Apollo account"`
+    DraftEmail DraftOutput   `json:"draft_email,omitempty" jsonschema:"optional draft from draft_gov_outreach, stored as context note"`
+}
+
+type SequenceOutput struct {
+    ContactID     string   `json:"contact_id"`
+    Queued        bool     `json:"queued"`
+    SequenceID    string   `json:"sequence_id"`
+    Notes         string   `json:"notes,omitempty"`
+    PartialErrors []string `json:"partial_errors,omitempty"`
+}
+```
+
+**Implementation (in order):**
+
+1. Call `deps.Apollo.CreateContact` with:
+   - `FirstName`, `LastName`, `Title`, `Email` from `in.Contact`
+   - `OrganizationName` from `in.Contact.Organization`
+   - Return early into PartialErrors if status 401/403 (master key required) — set `Notes: "create_contact requires master Apollo API key"`
+
+2. Extract `contact_id` from the response body (`contact.id` or top-level `id`).
+
+3. Call `deps.Apollo.EmailAccountsList` → find inbox with `default: true` → capture its `id` as `sendFromID`. If no default, use first inbox. If no inboxes, append to PartialErrors and skip step 4.
+
+4. Call `deps.Apollo.AddContactToSequence(in.SequenceID, ...)` with the contact_id and sendFromID. On 401/403, append `"add_to_sequence requires master Apollo API key"` to PartialErrors.
+
+5. Set `Queued: true` only if step 4 returned HTTP 200.
+
+6. All partial failures go to PartialErrors — never return a hard error.
+
+```go
+func NewSequenceHandler(deps Deps) func(context.Context, *mcp.CallToolRequest, SequenceInput) (*mcp.CallToolResult, SequenceOutput, error)
+```
+
+**Types you need from other files (same package — direct reference):**
+- `ContactResult` — from `tools/find_gov_contacts.go`
+- `DraftOutput` — from `tools/draft_gov_outreach.go` (Agent B writes this)
+
+Wait for Agent B to commit `tools/draft_gov_outreach.go` before building — you need `DraftOutput`. If it's not there yet, stub it as `type DraftOutput struct{ Subject, Body string }` temporarily and note it in the spec.
+
+### Build + smoke test
+
+```
+go build ./... && \
+(echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}'; sleep 0.5; echo '{"jsonrpc":"2.0","method":"notifications/initialized"}'; sleep 0.5; echo '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'; sleep 1) | ./govenrich 2>/dev/null
+```
+All 7 tools must appear. Append "Latest Build — YYYY-MM-DD HH:MM" to this spec with transcript + PASS/FAIL.
+
+---
+
+## Dispatcher Task — 2026-04-16
+
+**Assigned by dispatcher.** Re-run the JSON-RPC pipe smoke test against
+`stub/govenrich-stub` and append the transcript (initialize → tools/list →
+tools/call with `Name=Pleasanton`) to this spec under a new
+"Latest Smoke Test" heading. If the binary is missing or the test fails,
+note the error and rebuild from `stub/`.
+
+---
+
 ## Status — 2026-04-16
 
 Executed by automation. All code-side deliverables done; two DoD items
@@ -287,3 +358,160 @@ If step 3 surfaces an error, tail
 `~/Library/Logs/Claude/mcp*.log` and record the finding under
 `stub/README.md` → Troubleshooting so Agent A inherits a written
 playbook (as the spec instructs).
+
+---
+
+## Latest Smoke Test — 2026-04-16 20:07 UTC
+
+Re-ran per the dispatcher task at line 220. Binary
+`/Users/admin/edgetrace-gtm/stub/govenrich-stub` was already present;
+no rebuild needed. Exit code **0**, stderr empty, three clean JSON-RPC
+envelopes on stdout.
+
+**Pipe:**
+
+```
+initialize (protocolVersion=2025-11-25)
+  → notifications/initialized
+  → tools/list
+  → tools/call { name: "enrich_gov_agency_stub", arguments: { name: "Pleasanton" } }
+```
+
+**Full transcript (stdout, pretty-printed for readability):**
+
+```json
+// id=1 initialize
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "capabilities": { "logging": {}, "tools": { "listChanged": true } },
+    "protocolVersion": "2025-11-25",
+    "serverInfo": { "name": "govenrich-stub", "version": "0.0.1" }
+  }
+}
+
+// id=2 tools/list
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "tools": [
+      {
+        "name": "enrich_gov_agency_stub",
+        "description": "STUB harness for govenrich — returns canned sworn-officer data to de-risk Claude Desktop integration. Not a real enrichment tool.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "US law-enforcement agency or city name to enrich (e.g. 'Pleasanton')"
+            }
+          },
+          "required": ["name"],
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "greeting":        { "type": "string",  "description": "short status line" },
+            "agency":          { "type": "string",  "description": "resolved agency name" },
+            "sworn_officers":  { "type": "integer", "description": "count of full-time sworn officers (canned)" },
+            "note":            { "type": "string",  "description": "stub marker — will disappear when real tool ships" }
+          },
+          "required": ["greeting", "agency", "sworn_officers", "note"],
+          "additionalProperties": false
+        }
+      }
+    ]
+  }
+}
+
+// id=3 tools/call name=Pleasanton
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"agency\":\"Pleasanton Police Department\",\"greeting\":\"stub ok\",\"note\":\"STUB — replace with govenrich when shipping\",\"sworn_officers\":70}"
+      }
+    ],
+    "structuredContent": {
+      "agency": "Pleasanton Police Department",
+      "greeting": "stub ok",
+      "note": "STUB — replace with govenrich when shipping",
+      "sworn_officers": 70
+    }
+  }
+}
+```
+
+**Result:** PASS. Protocol version, tool registration, input/output
+schema, and the canned Pleasanton handler all match the contract. Ready
+for Claude Desktop wire-up (user steps in the Status block above).
+
+---
+
+## Latest Build — 2026-04-16 21:30 UTC
+
+Re-ran per Dispatcher Task 2 at line 220. Built
+`tools/create_apollo_sequence.go` per spec and attempted the 7-tool
+smoke test.
+
+**Result:** **FAIL** — blocked on Agent B, not on my file.
+
+**What's done:**
+
+- New file: `tools/create_apollo_sequence.go` — `SequenceInput`,
+  `SequenceOutput`, `NewSequenceHandler(deps)` all implemented per
+  spec. Follows the six-step order: CreateContact → extract id →
+  EmailAccountsList → pick default inbox (fallback to first) →
+  AddContactToSequence → set `Queued: true` only on HTTP 2xx. Every
+  401/403 and non-2xx routes to `PartialErrors`; `Notes` gets the
+  "master Apollo API key required" string on contact-create auth
+  failure. No hard errors returned to the MCP layer.
+- `DraftOutput` stubbed locally as
+  `struct { Subject, Body string }` with a deletion-marker comment —
+  `tools/draft_gov_outreach.go` does not yet exist in the repo, so per
+  the dispatcher's "stub temporarily" instruction, the shim lives in
+  my file until Agent B lands theirs. When the duplicate-type build
+  error appears, that is the signal to delete the stub.
+- `go build ./tools/` — **PASS**. My package compiles cleanly.
+- `go vet ./tools/` — **PASS**, no warnings.
+
+**What's blocked:**
+
+```
+$ go build ./...
+# github.com/edgetrace/govenrich
+./main.go:308:11: undefined: tools.NewDraftHandler
+```
+
+`main.go` (Agent A) already pre-wires all seven tools, including the
+`draft_gov_outreach` registration at line 305–308 that calls
+`tools.NewDraftHandler(deps)`. Agent B has not yet committed
+`tools/draft_gov_outreach.go`; until they do, the binary link fails
+and the 7-tool `tools/list` smoke test cannot run.
+
+The two missing handlers at the start of this task (`NewWebSearchHandler`,
+`NewDraftHandler`, `NewSequenceHandler`) have collapsed to one —
+Agent B shipped `NewWebSearchHandler` during execution, I shipped
+`NewSequenceHandler`, and `NewDraftHandler` is the sole remaining gap.
+
+**Smoke-test transcript:** not captured — binary does not exist. When
+Agent B lands `draft_gov_outreach.go`, rerun:
+
+```
+go build -o govenrich ./
+(printf '%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' \
+  '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'; \
+ sleep 0.5) | ./govenrich
+```
+
+Expect seven tool entries: `enrich_gov_agency`, `search_gov_agencies`,
+`score_agency_fit`, `find_gov_contacts`, `search_gov_web`,
+`draft_gov_outreach`, `create_apollo_sequence`.
