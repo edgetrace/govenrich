@@ -243,8 +243,9 @@ func main() {
 }
 
 // runMCPServer wires the four HTTP clients into a tools.Deps and serves
-// the single enrich_gov_agency tool over stdio. Every log line here must
-// go to stderr — stdout is the JSON-RPC transport and any stray write
+// four tools over stdio: enrich_gov_agency, search_gov_agencies,
+// score_agency_fit, find_gov_contacts. Every log line here must go to
+// stderr — stdout is the JSON-RPC transport and any stray write
 // corrupts it silently.
 func runMCPServer() {
 	// Claude Desktop spawns the binary with CWD=/, so the top-level
@@ -278,6 +279,21 @@ func runMCPServer() {
 		Name:        "enrich_gov_agency",
 		Description: "Enriches a US law-enforcement agency with sworn officer count and active federal grants — fills the Apollo gap on .gov domains.",
 	}, tools.NewEnrichHandler(deps))
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "search_gov_agencies",
+		Description: "Searches for US law-enforcement agencies in a state, ranked by ICP fit score. Returns merged Apollo + FBI records with sworn officer counts Apollo is missing.",
+	}, tools.NewSearchHandler(deps))
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "score_agency_fit",
+		Description: "Scores a single enriched agency against the Pleasanton PD ICP profile. Returns 0-100 fit score and reasoning strings. No external API calls.",
+	}, tools.NewScoreHandler(deps))
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "find_gov_contacts",
+		Description: "Finds people associated with a government agency via Apollo people search. Returns names, titles, and optionally enriched email addresses.",
+	}, tools.NewContactsHandler(deps))
 
 	if err := srv.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		fmt.Fprintln(os.Stderr, "mcp server:", err)
