@@ -86,11 +86,12 @@ func (c *Client) OrgEnrich(domain string) (int, []byte, error) {
 
 // 4. POST /mixed_people/api_search — no credits
 type PeopleSearchRequest struct {
-	Titles      []string `json:"person_titles,omitempty"`
-	Seniorities []string `json:"person_seniorities,omitempty"`
-	Locations   []string `json:"organization_locations,omitempty"`
-	PerPage     int      `json:"per_page,omitempty"`
-	Page        int      `json:"page,omitempty"`
+	Titles              []string `json:"person_titles,omitempty"`
+	Seniorities         []string `json:"person_seniorities,omitempty"`
+	Locations           []string `json:"organization_locations,omitempty"`
+	OrganizationDomains []string `json:"organization_domains,omitempty"`
+	PerPage             int      `json:"per_page,omitempty"`
+	Page                int      `json:"page,omitempty"`
 }
 
 func (c *Client) PeopleSearch(r PeopleSearchRequest) (int, []byte, error) {
