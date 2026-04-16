@@ -13,6 +13,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -246,6 +247,13 @@ func main() {
 // go to stderr — stdout is the JSON-RPC transport and any stray write
 // corrupts it silently.
 func runMCPServer() {
+	// Claude Desktop spawns the binary with CWD=/, so the top-level
+	// godotenv.Load() in main() (which reads from CWD) misses the .env
+	// sitting next to the binary. Resolve it relative to the executable.
+	if exe, err := os.Executable(); err == nil {
+		_ = godotenv.Load(filepath.Join(filepath.Dir(exe), ".env"))
+	}
+
 	apolloKey := os.Getenv("APOLLO_API_KEY")
 	if apolloKey == "" {
 		fatal("APOLLO_API_KEY missing — copy .env.example to .env and fill it in")

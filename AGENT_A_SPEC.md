@@ -244,6 +244,42 @@ mismatches and stray stdout writes are the two bugs that will eat time.
 
 ---
 
+## Dispatcher Task — 2026-04-16
+
+**Re-read this section on every spec change. Act on any new dispatcher task immediately.**
+
+**Priority: fix `.env` portability so Claude Desktop can spawn the binary from any working directory.**
+
+Current problem: `godotenv.Load()` in `main.go` loads `.env` from CWD. When Claude Desktop spawns the binary it sets CWD to `/`, so `.env` is never found and `runMCPServer()` immediately calls `fatal()` on the missing API keys.
+
+### Your task
+
+1. In `runMCPServer()` in `main.go`, replace `godotenv.Load()` (which is already called in `main()` before the branch) with a load that resolves `.env` relative to the binary's own location:
+
+```go
+// Load .env from same directory as the binary, so Claude Desktop can
+// spawn from any CWD.
+if exe, err := os.Executable(); err == nil {
+    _ = godotenv.Load(filepath.Join(filepath.Dir(exe), ".env"))
+}
+```
+
+Add `"path/filepath"` to imports. The existing top-level `godotenv.Load()` in `main()` can stay — it handles the dev case where you run from the repo root. The new load in `runMCPServer()` handles the Claude Desktop case.
+
+2. `go build -o govenrich` from repo root. Build must be clean.
+
+3. Run the smoke test to confirm the server still speaks MCP:
+```
+(echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}'; sleep 0.5; echo '{"jsonrpc":"2.0","method":"notifications/initialized"}'; sleep 0.5; echo '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'; sleep 1) | ./govenrich 2>/dev/null
+```
+Expect two clean JSON-RPC responses. `tools/list` must return `enrich_gov_agency`.
+
+4. Append a "Latest Build — YYYY-MM-DD HH:MM" section to this spec with the smoke test transcript and PASS/FAIL.
+
+5. Copy the `.env` file to sit alongside the binary: `cp .env govenrich.env` — no wait, instead just confirm the `.env` already lives at `/Users/admin/edgetrace-gtm/.env` next to the binary at `/Users/admin/edgetrace-gtm/govenrich`. If yes, the `filepath.Dir(exe)` approach resolves correctly and no file copy is needed.
+
+---
+
 ## Accomplished
 
 Executed 2026-04-16. All DOD items met; 8 commits landed.
@@ -305,4 +341,56 @@ Executed 2026-04-16. All DOD items met; 8 commits landed.
   contact — out of scope for Agent A's DOD).
 - Did not modify `apollo/*` or `tools/enrich_gov_agency.go`. The
   `tools/enrich_gov_agency.go` file on disk is Agent B's responsibility.
+
+---
+
+## Latest Build — 2026-04-16 20:17 UTC
+
+**Dispatcher task**: fix `.env` portability for Claude Desktop (spawns with
+CWD=`/`). **Result: PASS.**
+
+### Change
+
+`main.go` imports gain `"path/filepath"`. `runMCPServer()` now loads
+`.env` from the binary's own directory in addition to the top-level
+`main()` load:
+
+```go
+if exe, err := os.Executable(); err == nil {
+    _ = godotenv.Load(filepath.Join(filepath.Dir(exe), ".env"))
+}
+```
+
+Top-level `godotenv.Load()` in `main()` is intact, so running from the
+repo root still works for dev.
+
+### Layout confirmation
+
+`.env` lives at `/Users/admin/edgetrace-gtm/.env` next to the binary at
+`/Users/admin/edgetrace-gtm/govenrich` — `filepath.Dir(exe)` resolves
+to the same directory. No file copy needed.
+
+### Smoke test transcript
+
+**Test 1** — repo-root CWD (control):
+
+```
+$ (echo init; sleep 0.5; echo initialized; sleep 0.5; echo tools/list; sleep 1) | ./govenrich 2>/dev/null
+[1] id=1 init OK, serverInfo={'name': 'govenrich', 'version': '0.1.0'}, protocol=2025-11-25
+[2] id=2 tools/list OK, tools=['enrich_gov_agency']
+```
+
+**Test 2** — `/tmp` CWD (portability proof, simulates Claude Desktop):
+
+```
+$ cd /tmp && (echo init; sleep 0.5; echo initialized; sleep 0.5; echo tools/list; sleep 1) | /Users/admin/edgetrace-gtm/govenrich 2>/dev/null
+[1] id=1 init OK, serverInfo={'name': 'govenrich', 'version': '0.1.0'}, protocol=2025-11-25
+[2] id=2 tools/list OK, tools=['enrich_gov_agency']
+```
+
+Before the fix Test 2 would have died on `fatal("APOLLO_API_KEY missing")`
+because the top-level `godotenv.Load()` found no `.env` in `/tmp`. After
+the fix, `runMCPServer()` loads `.env` from `/Users/admin/edgetrace-gtm/`
+regardless of CWD and both tests return a clean `tools/list`.
+
 
