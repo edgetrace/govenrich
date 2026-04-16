@@ -241,3 +241,68 @@ Desktop config (Phase 2)".
 
 40–50 min. Budget the tail on hand-test debugging — protocol-version
 mismatches and stray stdout writes are the two bugs that will eat time.
+
+---
+
+## Accomplished
+
+Executed 2026-04-16. All DOD items met; 8 commits landed.
+
+### DOD checks
+
+| Item | Result |
+|---|---|
+| `go.mod` pins a non-prerelease SDK tag | `v1.5.0` pinned (commit `df7749d`) |
+| `PoliceEmployeeByORI` returns sworn-bearing payload | Added + response shape documented inline (commits `255dedc`, `e3e10f5`) |
+| `LocalGovFinanceStub` returns clear unavailability error | Added (commit `02ea325`) |
+| `go build -o govenrich` succeeds | Clean |
+| Hand-test pipe lists `enrich_gov_agency` | Verified — `initialize` returns `serverInfo: govenrich/0.1.0` at protocol `2025-11-25`; `tools/list` returns the tool with input + output schema |
+| `--hello-world` mode unchanged | `runHelloWorld` body untouched; only the no-flag branch replaced |
+| Zero `fmt.Print*` in MCP code path | 5 `fmt.Print*` in `main.go` — all gated inside `--hello-world`. `runMCPServer` writes only to `os.Stderr` (one `Fprintln` on fatal server error) |
+| README documents both client configs; no user-scope files touched | New "Running as an MCP server" section covers Claude Desktop and Claude Code, with the verify-without-client smoke-test pipe inlined |
+
+### Commits (in order)
+
+1. `a00c559` — Rewrite Phase 2a agent specs with Phase 1 findings
+2. `df7749d` — Pin `github.com/modelcontextprotocol/go-sdk v1.5.0`
+3. `c5073fc` — Add `tools/deps.go` frozen contract
+4. `255dedc` — Add `PoliceEmployeeByORI` and correct `AgenciesByState` comment
+5. `02ea325` — Add `LocalGovFinanceStub` for Phase 2 tool handlers
+6. `e3e10f5` — Simplify `PoliceEmployeeByORI` to match spec's one-arg signature
+7. `de8b42b` — Rewire `main.go` default branch to serve MCP over stdio
+8. `a73a277` — Document MCP server mode and both client configs in README
+
+### Surprises / spec deviations worth recording
+
+- **SDK protocol version** — `v1.5.0` advertises `"2025-11-25"` as
+  `latestProtocolVersion`, not `"2024-11-05"` as the original hand-test
+  block implied. Updated both the spec's pipe and the README verify block
+  to use `2025-11-25`.
+- **`/pe/agency/{ori}` requires `from`/`to` year params** — without them
+  the endpoint returns HTTP 400 with `"Bad request, 'from' and 'to' year
+  is required."` The method hides this internally (fixed 4-year trailing
+  window) so callers keep the one-arg signature the spec advertises.
+- **Sworn-officer extraction isn't a single field** — CDE returns
+  `actuals.Male Officers[year]` and `actuals.Female Officers[year]`
+  separately; Agent B sums them. Field names recorded in the method
+  comment per spec §3.
+- **Signature race with Agent B** — their `tools/enrich_gov_agency.go`
+  call site oscillated between 1-arg and 3-arg `PoliceEmployeeByORI`
+  during the run. Settled on the 1-arg form (matches written spec).
+- **`go.mod` upgraded Go 1.22 → 1.25.0** as a side effect of
+  `go get github.com/modelcontextprotocol/go-sdk@v1.5.0` — kept the
+  upgrade rather than forcing a downgrade that would drop newer SDK
+  features.
+- **`tools/deps.go` untouched since commit 3** — Agent B has not yet
+  requested any extra dependency, so the frozen contract held.
+
+### Explicit non-actions
+
+- Did not edit `~/Library/Application Support/Claude/claude_desktop_config.json`
+  or `~/.claude.json`. Both documented in README with a copy/paste block;
+  user applies.
+- Did not re-run `--hello-world` (burns Apollo credits and creates a real
+  contact — out of scope for Agent A's DOD).
+- Did not modify `apollo/*` or `tools/enrich_gov_agency.go`. The
+  `tools/enrich_gov_agency.go` file on disk is Agent B's responsibility.
+
