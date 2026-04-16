@@ -99,24 +99,18 @@ func NewContactsHandler(deps Deps) func(
 			limit = maxContactsLimit
 		}
 
+		// Apollo's `organization_domains` filter is silently ignored on
+		// .gov domains (live-probed), so we filter by
+		// `q_organization_name` instead — verified working against
+		// Vallejo PD. The client-side substring narrowing below stays
+		// as defense-in-depth: `q_organization_name` is also permissive
+		// (a bare token can pull in same-name hotels, weeklies, etc.).
 		req := apollo.PeopleSearchRequest{
 			Titles:    titles,
 			Locations: []string{stateFullName(in.State)},
+			OrgName:   in.AgencyName,
 			PerPage:   limit,
 			Page:      1,
-		}
-		// Live probe (2026-04-16): `organization_domains` is silently
-		// ignored by Apollo's /mixed_people/api_search for .gov domains
-		// and returns unrelated Fortune-500 executives. We keep accepting
-		// the `Domain` input so the tool contract doesn't churn, but we
-		// do not pass it upstream. The cleaner fix is to filter by
-		// `q_organization_name`, which needs an OrgName field on
-		// apollo.PeopleSearchRequest — TODO(agent-a) to add it, then
-		// swap in here. Until then we narrow post-hoc on agency-name
-		// substring match of the returned organization.name.
-		if in.Domain != "" {
-			out.PartialErrors = append(out.PartialErrors,
-				"apollo: organization_domains filter is silently ignored for .gov — falling back to title+state search, narrowed client-side on agency-name substring")
 		}
 
 		status, body, err := deps.Apollo.PeopleSearch(req)
