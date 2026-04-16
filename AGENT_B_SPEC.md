@@ -239,3 +239,76 @@ agency-name matching (APIs disagree on casing, whitespace, and suffixes)
 and reading the actual field name Agent A recorded for
 `PoliceEmployeeByORI`. Keep matching dumb and forgiving for the demo;
 precision can come in a later iteration.
+
+---
+
+## Execution log
+
+Shipped `tools/enrich_gov_agency.go`. `go build ./...` and `go vet ./...`
+both clean against the repo state at commit time.
+
+### What landed
+
+- **Types**: `EnrichInput`, `EnrichOutput`, `GrantSummary` exactly as
+  specified, with pointer fields for `ApolloEmployeeCount`,
+  `ApolloAnnualRevenue`, `SwornOfficers`, `AnnualExpenditureUSD` so JSON
+  null serializes when the upstream returns nothing.
+- **Handler signature**: `NewEnrichHandler(Deps) func(context.Context,
+  *mcp.CallToolRequest, EnrichInput) (*mcp.CallToolResult, EnrichOutput,
+  error)` — exact match for Agent A's call site, no casts needed.
+- **Fan-out**: `sync.WaitGroup` over four goroutines (Apollo, FBI,
+  USASpending, Census stub), all partial results merged into a single
+  `EnrichOutput` under a shared mutex. Handler never returns a non-nil
+  error; every per-source failure lands in `PartialErrors`.
+- **Apollo path**: `OrgSearch` across both `accounts` and `organizations`
+  arrays (matches `main.go` step-2 precedent), take the first hit's
+  `website_url`, normalize via `cleanDomain`, call `OrgEnrich`, surface
+  `estimated_num_employees` and `annual_revenue` from the
+  `organization` sub-object.
+- **FBI path**: `AgenciesByState` → flatten the county-keyed map →
+  fuzzy-match on `agency_name` (lowercase, punctuation stripped,
+  `Dept` ↔ `Department`, token-score fallback) → `PoliceEmployeeByORI`
+  → `extractSwornCount` parses the `actuals["Male Officers" | "Female
+  Officers"][year]` shape Agent A verified against Pleasanton PD
+  (CA0011100). Civilians are deliberately excluded. Most recent
+  populated year is auto-selected so no hardcoded year assumption.
+- **USASpending path**: 2-year trailing window ending today,
+  `recipient_search_text: [AgencyName]`,
+  `place_of_performance_locations: [{country: "USA", state: State}]`
+  (the `country` field Phase 1 fixed is included), top 5 results mapped
+  to `GrantSummary`.
+- **Census path**: Calls `LocalGovFinanceStub` for provenance honesty;
+  the resulting error lands in `PartialErrors` as
+  `"census: <stub message>"` and `"census"` is deliberately absent from
+  `Sources`.
+
+### Definition of done — status
+
+- [x] Package compiles cleanly — verified after Agent A committed the
+      SDK pin, `tools/deps.go`, `PoliceEmployeeByORI`, and
+      `LocalGovFinanceStub`.
+- [x] `NewEnrichHandler(Deps{})` returns a function with the exact
+      specified signature.
+- [x] `Sources` contains `"apollo"`, `"fbi_cde"`, `"usaspending"` and
+      never `"census"` (code path enforced).
+- [x] Partial API failures produce a response with `PartialErrors`
+      populated, not a hard error.
+- [ ] End-to-end behavior against live APIs for Pleasanton PD — pending
+      Agent A finishing the `main.go` MCP-server wire-up. Static logic
+      review confirms all the output invariants fire correctly; the
+      only runtime verification still needed is the actual HTTP calls.
+
+### Coordination notes for future agents
+
+- **PoliceEmployeeByORI signature drift**: during this work Agent A
+  flipped the method between `(ori)` and `(ori, fromYear, toYear)` more
+  than once. Final state at commit is the single-arg form (`(ori)`),
+  with the year window owned internally by the client. The tool
+  handler's only coupling is at one call site — if it flips again, fix
+  is a one-line edit in `resolveFBI`.
+- **File boundary respected**: no edits to `main.go`, `go.mod`,
+  `go.sum`, `tools/deps.go`, `apollo/*`, or `public/*`. Agent A's
+  unstaged changes at commit time (go.mod/go.sum/main.go/public/fbi.go)
+  are left untouched.
+- **No new deps**: handler uses only stdlib + the MCP SDK Agent A
+  already pinned, plus the existing `apollo` and `public` packages.
