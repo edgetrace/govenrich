@@ -244,6 +244,33 @@ mismatches and stray stdout writes are the two bugs that will eat time.
 
 ---
 
+## Dispatcher Task — Phase 5 — 2026-04-16
+
+**Re-read this spec tail on every change. Act immediately.**
+
+Add one field to `apollo/client.go` — `PeopleSearchRequest` needs `OrgName`:
+
+```go
+type PeopleSearchRequest struct {
+    Titles              []string `json:"person_titles,omitempty"`
+    Seniorities         []string `json:"person_seniorities,omitempty"`
+    Locations           []string `json:"organization_locations,omitempty"`
+    OrganizationDomains []string `json:"organization_domains,omitempty"`
+    OrgName             string   `json:"q_organization_name,omitempty"` // ADD
+    PerPage             int      `json:"per_page,omitempty"`
+    Page                int      `json:"page,omitempty"`
+}
+```
+
+`q_organization_name` is a real Apollo field — verified live against
+Vallejo PD, returned the Chief of Police. Agent B needs it to fix
+`find_gov_contacts` domain-filter bug.
+
+Then `go build ./...` and confirm clean. No smoke test needed — this
+is a one-field addition.
+
+---
+
 ## Dispatcher Task — Phase 4 — 2026-04-16
 
 **Re-read this spec tail on every change. Act on new dispatcher tasks immediately.**

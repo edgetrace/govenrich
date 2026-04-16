@@ -90,6 +90,7 @@ type PeopleSearchRequest struct {
 	Seniorities         []string `json:"person_seniorities,omitempty"`
 	Locations           []string `json:"organization_locations,omitempty"`
 	OrganizationDomains []string `json:"organization_domains,omitempty"`
+	OrgName             string   `json:"q_organization_name,omitempty"`
 	PerPage             int      `json:"per_page,omitempty"`
 	Page                int      `json:"page,omitempty"`
 }
