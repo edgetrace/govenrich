@@ -14,4 +14,8 @@ type Deps struct {
 	FBI         *public.FBIClient
 	USASpending *public.USASpendingClient
 	Census      *public.CensusClient
+	// AnthropicKey is optional — only search_gov_web and draft_gov_outreach
+	// need it. Handlers that require it must check for "" and return a
+	// structured error rather than panicking.
+	AnthropicKey string
 }
