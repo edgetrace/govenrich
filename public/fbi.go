@@ -53,9 +53,10 @@ func (c *FBIClient) AgenciesByState(state string) (int, []byte, error) {
 	return resp.StatusCode, data, nil
 }
 
-// PoliceEmployeeByORI hits the FBI CDE police-employee endpoint for a single
-// agency. The endpoint requires from/to year query params — without them the
-// API returns "Bad request, 'from' and 'to' year is required." (HTTP 400).
+// PoliceEmployeeByORI hits the FBI CDE police-employee endpoint for a
+// single agency. The endpoint requires from/to year query params (without
+// them the API returns "Bad request, 'from' and 'to' year is required.",
+// HTTP 400) — caller chooses the window, typically the last few full years.
 //
 // Response shape (verified against CA0011100 = Pleasanton PD):
 //
@@ -76,10 +77,15 @@ func (c *FBIClient) AgenciesByState(state string) (int, []byte, error) {
 //	actuals["Male Officers"][year] + actuals["Female Officers"][year]
 //
 // "Male Civilians" and "Female Civilians" are NOT sworn and must not be
-// added to that total. Prefer the most recent year available under
-// cde_properties.max_data_date rather than hardcoding a year — FBI lag
-// varies by agency.
-func (c *FBIClient) PoliceEmployeeByORI(ori string, fromYear, toYear int) (int, []byte, error) {
+// added to that total. Prefer the most recent year populated in actuals
+// (FBI data-refresh lag varies by agency).
+//
+// The year window is fixed internally to the last four full years — wide
+// enough to survive FBI's refresh lag, narrow enough that callers don't
+// need to think about it. Change here if that proves too narrow.
+func (c *FBIClient) PoliceEmployeeByORI(ori string) (int, []byte, error) {
+	toYear := time.Now().Year()
+	fromYear := toYear - 4
 	u := fmt.Sprintf("%s/pe/agency/%s?from=%d&to=%d&API_KEY=%s",
 		c.BaseURL, url.PathEscape(ori), fromYear, toYear, url.QueryEscape(c.APIKey))
 	req, err := http.NewRequest(http.MethodGet, u, nil)
