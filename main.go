@@ -157,6 +157,22 @@ func main() {
 	}
 	report(createOK, "Apollo  create contact", createStatus, nil, createNote)
 
+	// Apollo add_contact_ids requires send_email_from_email_account_id — not
+	// documented in SPEC §8. Look up the default connected inbox before the call.
+	var sendFromID string
+	if s, eb, eerr := ap.EmailAccountsList(); eerr == nil && s == 200 {
+		inboxes, _ := arrayField(eb, "email_accounts")
+		for _, a := range inboxes {
+			if d, ok := a["default"].(bool); ok && d {
+				sendFromID = strField(a, "id")
+				break
+			}
+		}
+		if sendFromID == "" && len(inboxes) > 0 {
+			sendFromID = strField(inboxes[0], "id")
+		}
+	}
+
 	// 8. Apollo add contact to sequence — master API key required.
 	addStatus := 0
 	addOK := false
@@ -166,10 +182,14 @@ func main() {
 		addNote = "skipped — no contact_id from step 7"
 	case firstSeqID == "":
 		addNote = "skipped — no sequence from step 6"
+	case sendFromID == "":
+		addNote = "skipped — no connected email inbox to send from"
 	default:
+		addBody := []byte(nil)
 		var addErr error
-		addStatus, _, addErr = ap.AddContactToSequence(firstSeqID, apollo.AddContactToSequenceRequest{
-			ContactIDs: []string{contactID},
+		addStatus, addBody, addErr = ap.AddContactToSequence(firstSeqID, apollo.AddContactToSequenceRequest{
+			ContactIDs:         []string{contactID},
+			SendEmailFromEmail: sendFromID,
 		})
 		switch {
 		case addErr != nil:
@@ -180,7 +200,7 @@ func main() {
 		case addStatus == 401 || addStatus == 403:
 			addNote = "skipped — requires master API key"
 		default:
-			addNote = fmt.Sprintf("unexpected status %d", addStatus)
+			addNote = fmt.Sprintf("unexpected status %d: %s", addStatus, snippet(addBody))
 		}
 	}
 	report(addOK, "Apollo  add to sequence", addStatus, nil, addNote)
@@ -307,6 +327,14 @@ func enrichmentGap(body []byte, err error, status int) (bool, string) {
 	}
 	return true, fmt.Sprintf("employees=%s, revenue=%s (city total — sworn-officer gap still needs FBI)",
 		fmtNum(empVal), fmtCurrency(revVal))
+}
+
+func snippet(b []byte) string {
+	s := strings.TrimSpace(string(b))
+	if len(s) > 160 {
+		s = s[:160] + "…"
+	}
+	return s
 }
 
 func fmtNum(v any) string {

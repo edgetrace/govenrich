@@ -110,6 +110,12 @@ func (c *Client) PeopleMatch(r PeopleMatchRequest) (int, []byte, error) {
 	return c.do(http.MethodPost, "/people/match", r)
 }
 
+// EmailAccountsList: GET /email_accounts — returns the connected inboxes.
+// Needed to supply send_email_from_email_account_id on step 8.
+func (c *Client) EmailAccountsList() (int, []byte, error) {
+	return c.do(http.MethodGet, "/email_accounts", nil)
+}
+
 // 6. POST /emailer_campaigns/search — no credits
 type SequenceSearchRequest struct {
 	PerPage int `json:"per_page,omitempty"`

@@ -276,10 +276,14 @@ Capture: `contact.id` — passed directly to step 8.
 POST /emailer_campaigns/{sequence_id}/add_contact_ids
 Body:
 {
-  "contact_ids":         ["contact_id_here"],
-  "emailer_campaign_id": "sequence_id_here"
+  "contact_ids":                      ["contact_id_here"],
+  "emailer_campaign_id":              "sequence_id_here",
+  "send_email_from_email_account_id": "{inbox_id}"
 }
 ```
+`send_email_from_email_account_id` is required (Apollo returns 422 without
+it) and maps to a connected inbox from `GET /email_accounts` — pick the
+one with `default: true`.  
 Expected: `200 OK`
 
 ---
