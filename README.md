@@ -11,21 +11,26 @@ One Go binary, stdio transport, no Node sidecar.
 
 ## Status
 
-**Phase 1** — connectivity check only. Four HTTP clients covering 11 external
-endpoints are wired up behind a `--hello-world` flag that exercises each call
-in sequence and prints a pass/fail table. MCP tool registration is not yet
-wired. See [`SPEC.md`](./SPEC.md) for the full Phase 1/2 spec and the four MCP
-tools planned for Phase 2.
+**Phase 1** — connectivity check. Four HTTP clients covering 11 external
+endpoints exercised behind a `--hello-world` flag; pass/fail table on exit.
+
+**Phase 2a (in flight)** — MCP transport wired. The no-flag path now serves
+a single tool, `enrich_gov_agency`, over stdio. `search_gov_agencies`,
+`score_agency_fit`, and `draft_gov_outreach` are planned for a follow-up
+iteration (see [`SPEC.md`](./SPEC.md) §"MCP Tools").
 
 ## Layout
 
 ```
-main.go              # entry point, --hello-world driver
-apollo/client.go     # Apollo REST client (8 endpoints + helper)
+main.go                    # entry: MCP server (default) or --hello-world
+apollo/client.go           # Apollo REST client (8 endpoints + helper)
 public/
-  fbi.go             # FBI CDE agencies-by-state
-  usaspending.go     # USASpending grants search
-  census.go          # Census local government finance (endpoint TBD)
+  fbi.go                   # FBI CDE agencies-by-state + police employee
+  usaspending.go           # USASpending grants search
+  census.go                # Census local government finance (stubbed)
+tools/
+  deps.go                  # frozen Deps contract (4 clients)
+  enrich_gov_agency.go     # the Phase 2a MCP tool handler
 ```
 
 ## Setup
@@ -42,8 +47,8 @@ public/
 ## Usage
 
 ```
-./govenrich              # no-op: prints a placeholder and exits
-./govenrich --hello-world # runs all 10 external calls against live APIs
+./govenrich               # serves MCP over stdio (default) — see "Running as an MCP server" below
+./govenrich --hello-world # runs all 10 external calls against live APIs and exits
 ```
 
 Example output on a master-key run against California LE data:
@@ -108,14 +113,34 @@ to run, use a standard (non-master) key; they will report
   `timeseries` collection. Flagged in both `public/census.go` and `SPEC.md`
   pending a dataset rebuild.
 - **FBI sworn officers**: `byStateAbbr` returns agency directory info only
-  (ori, name, city, NIBRS status). Sworn counts require a per-ORI call
-  against the `/pe/` endpoint — not yet wired. SPEC §9 overstates what the
-  current endpoint provides.
+  (ori, name, city, NIBRS status). Sworn counts come from the separate
+  `PoliceEmployeeByORI(ori)` call against `/pe/agency/{ori}`, which the
+  `enrich_gov_agency` tool wires up. SPEC §9 overstates what `byStateAbbr`
+  provides on its own.
 - **People enrichment (step 5)**: Apollo commonly has no email for an
   arbitrary LE search candidate. The `[✗]` is a real no-data signal, not a
   code error.
 
-## Claude Desktop config (Phase 2)
+## Running as an MCP server
+
+The default (no-flag) path serves MCP over stdio and registers
+`enrich_gov_agency`. Apply one of the configs below to whichever client
+you use. **This repo does not write to your client config files** —
+copy/paste the block yourself and restart the client.
+
+### Claude Desktop
+
+File: `~/Library/Application Support/Claude/claude_desktop_config.json`
+(macOS). Fully quit Claude Desktop (`⌘Q`, not window close) and relaunch
+after editing — MCP subprocesses are only spawned on startup.
+
+### Claude Code
+
+File: `~/.claude.json` — add the same `mcpServers` block under whichever
+project scope you want the server available in, then restart the Code
+session.
+
+### Shared config shape
 
 ```json
 {
@@ -124,10 +149,29 @@ to run, use a standard (non-master) key; they will report
       "command": "/absolute/path/to/govenrich",
       "env": {
         "APOLLO_API_KEY": "...",
-        "FBI_CDE_API_KEY": "...",
-        "ANTHROPIC_API_KEY": "..."
+        "FBI_CDE_API_KEY": "..."
       }
     }
   }
 }
 ```
+
+`ANTHROPIC_API_KEY` is only needed once `draft_gov_outreach` ships in a
+later iteration; omit it for Phase 2a.
+
+### Verifying without a client
+
+Before wiring a GUI client, you can smoke-test the transport directly:
+
+```sh
+{ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}';
+  echo '{"jsonrpc":"2.0","method":"notifications/initialized"}';
+  echo '{"jsonrpc":"2.0","id":2,"method":"tools/list"}';
+  sleep 1; } | ./govenrich
+```
+
+Expect two JSON-RPC responses on stdout — the second lists
+`enrich_gov_agency` with its input/output schema. Any non-JSON line on
+stdout indicates transport corruption (a stray `fmt.Println` somewhere)
+and the client will fail silently; fix it before touching the client
+config.
