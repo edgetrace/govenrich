@@ -86,8 +86,8 @@ func NewWebSearchHandler(deps Deps) func(
 
 		client := anthropic.NewClient(option.WithAPIKey(deps.AnthropicKey))
 		resp, err := client.Messages.New(ctx, anthropic.MessageNewParams{
-			Model:     anthropic.Model("claude-opus-4-7"),
-			MaxTokens: 4096,
+			Model:     anthropic.Model("claude-sonnet-4-6"),
+			MaxTokens: 1024,
 			System: []anthropic.TextBlockParam{{
 				Text: webSearchSystem,
 			}},
