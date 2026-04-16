@@ -7,7 +7,7 @@ mailboxes and filesystem change events as the wake-up bus.*
 ## The elevator pitch
 
 Spin up N independent Claude Code terminals. Give each a scoped spec
-file (`AGENT_A_SPEC.md`, `AGENT_B_SPEC.md`, …). Each agent watches its
+file (`PLUMBER_SPEC.md`, `CRAFTSMAN_SPEC.md`, …). Each agent watches its
 own spec via a persistent `Monitor` task. A human (or another agent)
 appends a new "Dispatcher Task" section to a spec → the watcher fires →
 the agent wakes, diffs the spec against `HEAD`, executes the new task,
@@ -34,7 +34,7 @@ have. The comparison is on the next page.
 | **Parallelism** | Parent sequences them | N agents running concurrently at their own pace |
 | **Blast radius** | All share one process + context | Each terminal = isolated process, permissions, context |
 | **Handoff surface** | One return message to the parent | A frozen contract in code (e.g. `tools/deps.go`) + named exported symbols |
-| **Human observability** | Buried in parent's transcript | `cat AGENT_A_SPEC.md` from any shell |
+| **Human observability** | Buried in parent's transcript | `cat PLUMBER_SPEC.md` from any shell |
 | **Agent-to-agent coordination** | Parent round-trips messages | Direct, via shared repo state (commits, file presence, build status) |
 | **Works while parent idle** | No — parent must drive | Yes — monitors fire and agents act autonomously |
 | **Scales to…** | What fits in one context window | What fits in git |
@@ -60,12 +60,12 @@ Each agent gets `AGENT_{X}_SPEC.md` with:
 Each agent starts a background `Monitor` on its own spec:
 
 ```bash
-file=/Users/admin/edgetrace-gtm/AGENT_A_SPEC.md
+file=/Users/admin/edgetrace-gtm/PLUMBER_SPEC.md
 last=$(stat -f %m "$file" 2>/dev/null || echo 0)
 while true; do
   cur=$(stat -f %m "$file" 2>/dev/null || echo 0)
   if [ "$cur" != "$last" ]; then
-    echo "AGENT_A_SPEC.md changed at $(date -u +%Y-%m-%dT%H:%M:%SZ) (mtime=$cur)"
+    echo "PLUMBER_SPEC.md changed at $(date -u +%Y-%m-%dT%H:%M:%SZ) (mtime=$cur)"
     last=$cur
   fi
   sleep 2
@@ -110,7 +110,7 @@ retry mechanism is another dispatcher edit. All the hard distributed
 systems problems collapse because the artifact is the protocol.
 
 ### 5. Cross-agent contracts committed early
-In this project: `tools/deps.go` is committed by Agent A on commit 2,
+In this project: `tools/deps.go` is committed by Plumber on commit 2,
 before anyone's logic is written. It declares:
 
 ```go
@@ -153,9 +153,9 @@ tooling.
 ## Case study: what we actually built
 
 Four agents over ~2 hours of wall time:
-- **Agent A** — MCP server scaffolding, client prep, wiring
-- **Agent B** — tool handler implementations
-- **Agent C** — throwaway stub MCP server to de-risk Claude Desktop
+- **Plumber** — MCP server scaffolding, client prep, wiring
+- **Craftsman** — tool handler implementations
+- **Scout** — throwaway stub MCP server to de-risk Claude Desktop
   integration in parallel
 - **Dispatcher** (human + occasional meta-Claude) — appending Phase 2a,
   Phase 3, Phase 4 tasks to spec files as the design evolved

@@ -1,4 +1,4 @@
-# Agent C — MCP Stub & Claude Desktop Integration Harness
+# Scout — MCP Stub & Claude Desktop Integration Harness
 
 ## Role
 
@@ -69,7 +69,7 @@ go list -m -versions github.com/modelcontextprotocol/go-sdk
 ```
 
 Pick the latest non-prerelease tag (pick independently — you do not need
-to match Agent A's pin since your module is separate). `go get` that tag.
+to match Plumber's pin since your module is separate). `go get` that tag.
 
 ### 2. Write the stub server.
 
@@ -77,12 +77,12 @@ to match Agent A's pin since your module is separate). `go get` that tag.
 
 - One imported struct pair, `HelloInput { Name string }` and
   `HelloOutput { Greeting, Agency string, SwornOfficers int, Note string }`.
-  Use the same `SwornOfficers` field name Agent B will use so rehearsal
+  Use the same `SwornOfficers` field name Craftsman will use so rehearsal
   muscle memory carries over.
 - `jsonschema:"..."` tags on every input field. Include an example in the
   description — this is the prompt the model sees.
 - One tool registered: `enrich_gov_agency_stub` (NOT `enrich_gov_agency`
-  — name collision with Agent A's eventual server would confuse the
+  — name collision with Plumber's eventual server would confuse the
   model during rehearsal and at demo time if both happen to be registered).
 - Handler returns fake data keyed off input: for `Name="Pleasanton"`,
   return `SwornOfficers: 70, Agency: "Pleasanton Police Department",
@@ -113,7 +113,7 @@ contamination somewhere; find and fix before touching Claude Desktop.
 
 For `<SDK default>`, grep the SDK for the protocol version constant
 (`LatestProtocolVersion` or equivalent) and mirror its value. Record the
-value you used in `stub/README.md` so Agent A can match.
+value you used in `stub/README.md` so Plumber can match.
 
 ### 5. Draft the Claude Desktop config.
 
@@ -126,7 +126,7 @@ value you used in `stub/README.md` so Agent A can match.
       "command": "/ABSOLUTE/PATH/TO/edgetrace-gtm/stub/govenrich-stub"
     },
     "_govenrich_real_pending": {
-      "_comment": "Uncomment and rename to govenrich when Agent A ships",
+      "_comment": "Uncomment and rename to govenrich when Plumber ships",
       "command": "/ABSOLUTE/PATH/TO/edgetrace-gtm/govenrich",
       "env": {
         "APOLLO_API_KEY": "REPLACE_ME",
@@ -157,7 +157,7 @@ Walk the user through:
 
 If step 3 fails, check `~/Library/Logs/Claude/mcp*.log`. Record whatever
 error you find in `stub/README.md` under a "Troubleshooting" section so
-Agent A hits the same issues with a written playbook.
+Plumber hits the same issues with a written playbook.
 
 ### 7. Draft demo prompts.
 
@@ -170,7 +170,7 @@ commentary:
 3. Scoring or follow-up (optional stretch): `draft_gov_outreach`-style
    ask that works against the stub's canned response.
 
-Write these so the same prompts will work unchanged once Agent A/B ship
+Write these so the same prompts will work unchanged once Plumber/B ship
 and the real `enrich_gov_agency` replaces `enrich_gov_agency_stub`. (The
 user will just update the tool name in their mental script.)
 
@@ -195,7 +195,7 @@ rm -rf stub demo/claude_desktop_config.example.json
 - `demo/claude_desktop_config.example.json` has both the stub entry and
   a commented placeholder for the real binary.
 - `demo/prompts.md` has three demo prompts that will work unchanged with
-  Agent A's real server (modulo the tool name swap).
+  Plumber's real server (modulo the tool name swap).
 - `stub/README.md` documents the protocol version used, any
   troubleshooting findings from step 6, and the cleanup procedure.
 
@@ -205,16 +205,16 @@ rm -rf stub demo/claude_desktop_config.example.json
   connectivity harness, not an enrichment demo.
 - Do not share code with the main module. Separate `go.mod` = separate
   blast radius.
-- Do not try to match Agent B's exact output schema. Close enough for
+- Do not try to match Craftsman's exact output schema. Close enough for
   rehearsal (`SwornOfficers` is the one shared field name); full
-  fidelity is Agent B's job.
+  fidelity is Craftsman's job.
 - Do not write to the user's real Claude Desktop config. Hand them an
   example; let them copy.
 
 ## Estimated time
 
 15-20 minutes total. If the Claude Desktop integration takes longer
-than 20 minutes, stop and report what's blocking — Agent A will hit the
+than 20 minutes, stop and report what's blocking — Plumber will hit the
 same wall and needs to know.
 
 ## Dispatcher Task 2 — Phase 4 — 2026-04-16
@@ -264,9 +264,9 @@ func NewSequenceHandler(deps Deps) func(context.Context, *mcp.CallToolRequest, S
 
 **Types you need from other files (same package — direct reference):**
 - `ContactResult` — from `tools/find_gov_contacts.go`
-- `DraftOutput` — from `tools/draft_gov_outreach.go` (Agent B writes this)
+- `DraftOutput` — from `tools/draft_gov_outreach.go` (Craftsman writes this)
 
-Wait for Agent B to commit `tools/draft_gov_outreach.go` before building — you need `DraftOutput`. If it's not there yet, stub it as `type DraftOutput struct{ Subject, Body string }` temporarily and note it in the spec.
+Wait for Craftsman to commit `tools/draft_gov_outreach.go` before building — you need `DraftOutput`. If it's not there yet, stub it as `type DraftOutput struct{ Subject, Body string }` temporarily and note it in the spec.
 
 ### Build + smoke test
 
@@ -301,7 +301,7 @@ require the user to drive the Claude Desktop GUI.
   non-prerelease at time of execution).
 - `stub/main.go` registers one tool, `enrich_gov_agency_stub`, with
   `HelloInput{Name}` and `HelloOutput{Greeting, Agency, SwornOfficers,
-  Note}`. `SwornOfficers` field name matches the shape Agent B will use.
+  Note}`. `SwornOfficers` field name matches the shape Craftsman will use.
   Pleasanton returns `SwornOfficers: 70, Agency: "Pleasanton Police
   Department"`; everything else returns a generic canned response.
 - Stdout hygiene verified: zero writes to stdout in the code path; the
@@ -314,21 +314,21 @@ require the user to drive the Claude Desktop GUI.
   `sworn_officers=70`. No stderr noise.
 - Protocol version used: `2025-11-25` (mirrors `latestProtocolVersion`
   in `mcp/shared.go` at v1.5.0). Recorded in `stub/README.md` for
-  Agent A to match.
+  Plumber to match.
 - `demo/claude_desktop_config.example.json` written with stub entry +
   commented-out real `govenrich` placeholder carrying `APOLLO_API_KEY`
   and `FBI_CDE_API_KEY` env vars.
 - `demo/prompts.md` has three rehearsal prompts: (1) happy path
   Pleasanton, (2) null-gap reveal on a small-town department, (3)
   follow-up cold-outreach draft. Prompts are phrased so the same text
-  works unchanged when Agent A's real `enrich_gov_agency` replaces the
+  works unchanged when Plumber's real `enrich_gov_agency` replaces the
   stub.
 - `stub/README.md` documents SDK pin, protocol version, build + smoke
   test, Claude Desktop wire-up, troubleshooting playbook, and the
   two-line cleanup procedure.
 - Zero writes outside `stub/` and `demo/`. The concurrent modifications
   seen to `go.mod`, `go.sum`, `main.go`, and `tools/enrich_gov_agency.go`
-  during execution are Agent A's and Agent B's in-progress work, not
+  during execution are Plumber's and Craftsman's in-progress work, not
   mine.
 
 **Smoke-test transcript (abbreviated):**
@@ -356,7 +356,7 @@ require the user to drive the Claude Desktop GUI.
 
 If step 3 surfaces an error, tail
 `~/Library/Logs/Claude/mcp*.log` and record the finding under
-`stub/README.md` → Troubleshooting so Agent A inherits a written
+`stub/README.md` → Troubleshooting so Plumber inherits a written
 playbook (as the spec instructs).
 
 ---
@@ -460,7 +460,7 @@ Re-ran per Dispatcher Task 2 at line 220. Built
 `tools/create_apollo_sequence.go` per spec and attempted the 7-tool
 smoke test.
 
-**Result:** **FAIL** — blocked on Agent B, not on my file.
+**Result:** **FAIL** — blocked on Craftsman, not on my file.
 
 **What's done:**
 
@@ -476,7 +476,7 @@ smoke test.
   `struct { Subject, Body string }` with a deletion-marker comment —
   `tools/draft_gov_outreach.go` does not yet exist in the repo, so per
   the dispatcher's "stub temporarily" instruction, the shim lives in
-  my file until Agent B lands theirs. When the duplicate-type build
+  my file until Craftsman lands theirs. When the duplicate-type build
   error appears, that is the signal to delete the stub.
 - `go build ./tools/` — **PASS**. My package compiles cleanly.
 - `go vet ./tools/` — **PASS**, no warnings.
@@ -489,19 +489,19 @@ $ go build ./...
 ./main.go:308:11: undefined: tools.NewDraftHandler
 ```
 
-`main.go` (Agent A) already pre-wires all seven tools, including the
+`main.go` (Plumber) already pre-wires all seven tools, including the
 `draft_gov_outreach` registration at line 305–308 that calls
-`tools.NewDraftHandler(deps)`. Agent B has not yet committed
+`tools.NewDraftHandler(deps)`. Craftsman has not yet committed
 `tools/draft_gov_outreach.go`; until they do, the binary link fails
 and the 7-tool `tools/list` smoke test cannot run.
 
 The two missing handlers at the start of this task (`NewWebSearchHandler`,
 `NewDraftHandler`, `NewSequenceHandler`) have collapsed to one —
-Agent B shipped `NewWebSearchHandler` during execution, I shipped
+Craftsman shipped `NewWebSearchHandler` during execution, I shipped
 `NewSequenceHandler`, and `NewDraftHandler` is the sole remaining gap.
 
 **Smoke-test transcript:** not captured — binary does not exist. When
-Agent B lands `draft_gov_outreach.go`, rerun:
+Craftsman lands `draft_gov_outreach.go`, rerun:
 
 ```
 go build -o govenrich ./

@@ -1,4 +1,4 @@
-# Agent B — Tool Implementation (`enrich_gov_agency`)
+# Craftsman — Tool Implementation (`enrich_gov_agency`)
 
 ## Role
 
@@ -9,7 +9,7 @@ USASpending.gov (for federal grants), and — in a future iteration —
 Census (currently stubbed), then merges the results into one struct.
 
 You do **not** wire the MCP server, touch `main.go`, or add dependencies —
-Agent A owns all of that. Your only integration point with Agent A is the
+Plumber owns all of that. Your only integration point with Plumber is the
 shared contract below.
 
 ## Phase II scope note
@@ -28,7 +28,7 @@ three tools will be scoped in a follow-up spec pair after this one ships.
   - `*public.FBIClient.AgenciesByState(state)` — returns `{COUNTY: [...]}`
     (directory info only — no sworn count)
   - `*public.FBIClient.PoliceEmployeeByORI(ori)` — returns per-agency
-    personnel data including `sworn_officers`. **Agent A adds this method
+    personnel data including `sworn_officers`. **Plumber adds this method
     before you start. Don't skip it — this is your canonical sworn-count
     source.**
   - `*public.USASpendingClient.SpendingByAward(req)` — returns `{results: [...]}`
@@ -56,11 +56,11 @@ as the LE-specific figure that only this tool can combine.
 
 Do **not** touch `main.go`, `go.mod`, `go.sum`, `tools/deps.go`,
 `apollo/*`, or `public/*`. If you need a new dependency or a new client
-method, ping Agent A — they will extend `Deps{}` or add the method.
+method, ping Plumber — they will extend `Deps{}` or add the method.
 
-## Frozen contract (shared with Agent A)
+## Frozen contract (shared with Plumber)
 
-Agent A has committed `tools/deps.go` with:
+Plumber has committed `tools/deps.go` with:
 
 ```go
 type Deps struct {
@@ -71,7 +71,7 @@ type Deps struct {
 }
 ```
 
-You must export exactly this symbol for Agent A to reference:
+You must export exactly this symbol for Plumber to reference:
 
 ```go
 func NewEnrichHandler(deps Deps) func(
@@ -81,7 +81,7 @@ func NewEnrichHandler(deps Deps) func(
 ) (*mcp.CallToolResult, EnrichOutput, error)
 ```
 
-`EnrichInput` and `EnrichOutput` are yours to define — Agent A references
+`EnrichInput` and `EnrichOutput` are yours to define — Plumber references
 them by name, not by shape.
 
 ## Required types
@@ -164,7 +164,7 @@ type GrantSummary struct {
      `agency_type_name`, `city`.
    - Call `PoliceEmployeeByORI(ori)` with the matched ORI.
    - Extract the sworn count from the response. The exact field name is
-     whatever Agent A recorded in the `PoliceEmployeeByORI` method
+     whatever Plumber recorded in the `PoliceEmployeeByORI` method
      comment — check there before coding.
 
 4. **USASpending: search by recipient.** POST `spending_by_award` with
@@ -213,11 +213,11 @@ no structured output is possible.
 
 ## Definition of done
 
-- Package compiles: `go build ./tools/...` (after Agent A has committed
+- Package compiles: `go build ./tools/...` (after Plumber has committed
   `go.mod`, `tools/deps.go`, `PoliceEmployeeByORI`, and
   `LocalGovFinanceStub`).
 - `NewEnrichHandler(Deps{})` returns a function with the exact signature
-  above — Agent A's call site must not need a cast.
+  above — Plumber's call site must not need a cast.
 - For input `{AgencyName: "Pleasanton Police Department", State: "CA"}`:
   - `SwornOfficers` is populated from FBI `/pe/` (the real null-gap demo).
   - `ApolloEmployeeCount` and `ApolloAnnualRevenue` are populated with
@@ -236,7 +236,7 @@ no structured output is possible.
 
 30–40 min. The fan-out and merge are small; the tedious parts are the
 agency-name matching (APIs disagree on casing, whitespace, and suffixes)
-and reading the actual field name Agent A recorded for
+and reading the actual field name Plumber recorded for
 `PoliceEmployeeByORI`. Keep matching dumb and forgiving for the demo;
 precision can come in a later iteration.
 
@@ -260,7 +260,7 @@ strategy with `q_organization_name` search instead. In `resolveContacts`
 (or wherever `PeopleSearch` is called), add `Q` field to the search:
 
 Check `apollo/client.go` — `OrgSearchRequest` has no `Q` field on
-`PeopleSearchRequest`. You need Agent A to add it, OR work around it
+`PeopleSearchRequest`. You need Plumber to add it, OR work around it
 by passing the agency name via a different field. Check if Apollo's
 `/mixed_people/api_search` accepts `q_organization_name` as a body
 field — it does (verified in live test). Add to `apollo.PeopleSearchRequest`:
@@ -269,7 +269,7 @@ field — it does (verified in live test). Add to `apollo.PeopleSearchRequest`:
 OrgName string `json:"q_organization_name,omitempty"`
 ```
 
-Ping Agent A to add this field to `apollo/client.go`. Then in
+Ping Plumber to add this field to `apollo/client.go`. Then in
 `find_gov_contacts.go`, populate it with `in.AgencyName` when searching.
 Remove `OrganizationDomains` from the search request — it doesn't work
 for `.gov` orgs.
@@ -302,7 +302,7 @@ endpoint accepts partial names.
 
 **Re-read this spec tail on every change. Act on new dispatcher tasks immediately.**
 
-Build two new tool files. Agent A is adding the Anthropic SDK to go.mod and wiring the handlers — wait for their go.mod commit before building, then `go build ./...` to confirm.
+Build two new tool files. Plumber is adding the Anthropic SDK to go.mod and wiring the handlers — wait for their go.mod commit before building, then `go build ./...` to confirm.
 
 ### File 1: `tools/search_gov_web.go`
 
@@ -333,7 +333,7 @@ type Stakeholder struct {
 ```
 
 **Implementation:**
-- Use `github.com/anthropics/anthropic-sdk-go`. Check go.mod for the exact import path after Agent A adds it.
+- Use `github.com/anthropics/anthropic-sdk-go`. Check go.mod for the exact import path after Plumber adds it.
 - Model: `claude-opus-4-7`
 - Enable the `web_search` tool in the API call (check the SDK docs for how to pass built-in tools).
 - System prompt: "You are a B2G sales researcher. Extract named people with titles, budget signals (dollar amounts, tech purchases), and recent news relevant to selling technology to this agency. Be specific and cite sources."
@@ -420,7 +420,7 @@ All 7 tools must appear. Append "Latest Build — YYYY-MM-DD HH:MM" to this spec
 
 Build three new MCP tool files. Each is a new file in `tools/`. Do not
 touch `main.go`, `go.mod`, `tools/deps.go`, `apollo/*`, or `public/*`.
-Agent A is wiring the `mcp.AddTool` registrations in parallel.
+Plumber is wiring the `mcp.AddTool` registrations in parallel.
 
 ---
 
@@ -598,7 +598,7 @@ type ContactResult struct {
    dramatically improves precision. Check `apollo/client.go`'s
    `PeopleSearchRequest` struct; if `OrganizationDomains` field doesn't
    exist, add it to the struct (you own `tools/` but NOT `apollo/` —
-   ping Agent A to add the field if needed, or check if it can be
+   ping Plumber to add the field if needed, or check if it can be
    passed via a map. Do NOT edit `apollo/client.go` yourself).
 3. Parse `people` array from response. Map each to `ContactResult`.
    Apply `Limit` (default 5, cap 10).
@@ -611,9 +611,9 @@ type ContactResult struct {
 
 **Credit warning note:** `EnrichEmail: true` costs one Apollo credit per
 person. The tool description must warn about this. Add to the tool's
-description field in Agent A's `mcp.AddTool` call: append
+description field in Plumber's `mcp.AddTool` call: append
 `" Set enrich_email=false to avoid Apollo credit usage."` — but since
-Agent A writes the description, just note it here for coordination.
+Plumber writes the description, just note it here for coordination.
 
 **Handler export:**
 ```go
@@ -622,9 +622,9 @@ func NewContactsHandler(deps Deps) func(context.Context, *mcp.CallToolRequest, C
 
 ---
 
-### Coordination with Agent A
+### Coordination with Plumber
 
-Agent A is adding `OrganizationDomains []string` to `apollo.PeopleSearchRequest`
+Plumber is adding `OrganizationDomains []string` to `apollo.PeopleSearchRequest`
 if it doesn't already exist. Check `apollo/client.go` before coding — if
 the field is already there, use it. If not, write a spec note here and
 work around it (pass domain as part of the name search instead).
@@ -795,7 +795,7 @@ both clean against the repo state at commit time.
   null serializes when the upstream returns nothing.
 - **Handler signature**: `NewEnrichHandler(Deps) func(context.Context,
   *mcp.CallToolRequest, EnrichInput) (*mcp.CallToolResult, EnrichOutput,
-  error)` — exact match for Agent A's call site, no casts needed.
+  error)` — exact match for Plumber's call site, no casts needed.
 - **Fan-out**: `sync.WaitGroup` over four goroutines (Apollo, FBI,
   USASpending, Census stub), all partial results merged into a single
   `EnrichOutput` under a shared mutex. Handler never returns a non-nil
@@ -809,7 +809,7 @@ both clean against the repo state at commit time.
   fuzzy-match on `agency_name` (lowercase, punctuation stripped,
   `Dept` ↔ `Department`, token-score fallback) → `PoliceEmployeeByORI`
   → `extractSwornCount` parses the `actuals["Male Officers" | "Female
-  Officers"][year]` shape Agent A verified against Pleasanton PD
+  Officers"][year]` shape Plumber verified against Pleasanton PD
   (CA0011100). Civilians are deliberately excluded. Most recent
   populated year is auto-selected so no hardcoded year assumption.
 - **USASpending path**: 2-year trailing window ending today,
@@ -824,7 +824,7 @@ both clean against the repo state at commit time.
 
 ### Definition of done — status
 
-- [x] Package compiles cleanly — verified after Agent A committed the
+- [x] Package compiles cleanly — verified after Plumber committed the
       SDK pin, `tools/deps.go`, `PoliceEmployeeByORI`, and
       `LocalGovFinanceStub`.
 - [x] `NewEnrichHandler(Deps{})` returns a function with the exact
@@ -834,23 +834,23 @@ both clean against the repo state at commit time.
 - [x] Partial API failures produce a response with `PartialErrors`
       populated, not a hard error.
 - [ ] End-to-end behavior against live APIs for Pleasanton PD — pending
-      Agent A finishing the `main.go` MCP-server wire-up. Static logic
+      Plumber finishing the `main.go` MCP-server wire-up. Static logic
       review confirms all the output invariants fire correctly; the
       only runtime verification still needed is the actual HTTP calls.
 
 ### Coordination notes for future agents
 
-- **PoliceEmployeeByORI signature drift**: during this work Agent A
+- **PoliceEmployeeByORI signature drift**: during this work Plumber
   flipped the method between `(ori)` and `(ori, fromYear, toYear)` more
   than once. Final state at commit is the single-arg form (`(ori)`),
   with the year window owned internally by the client. The tool
   handler's only coupling is at one call site — if it flips again, fix
   is a one-line edit in `resolveFBI`.
 - **File boundary respected**: no edits to `main.go`, `go.mod`,
-  `go.sum`, `tools/deps.go`, `apollo/*`, or `public/*`. Agent A's
+  `go.sum`, `tools/deps.go`, `apollo/*`, or `public/*`. Plumber's
   unstaged changes at commit time (go.mod/go.sum/main.go/public/fbi.go)
   are left untouched.
-- **No new deps**: handler uses only stdlib + the MCP SDK Agent A
+- **No new deps**: handler uses only stdlib + the MCP SDK Plumber
   already pinned, plus the existing `apollo` and `public` packages.
 
 ---
@@ -1022,7 +1022,7 @@ Shipped in new files, same `tools` package:
   `enrich_email`).
 
 No edits to `main.go`, `go.mod`, `tools/deps.go`, `apollo/*`, or
-`public/*` — Agent A had already wired the four `mcp.AddTool`
+`public/*` — Plumber had already wired the four `mcp.AddTool`
 registrations in parallel.
 
 ### Schema hygiene notes
@@ -1039,12 +1039,12 @@ Two quiet MCP-schema gotchas caught during smoke testing:
   `apollo_annual_revenue: null`, `annual_expenditure_usd: null`,
   `sources: []`, etc. explicitly.
 
-### Coordination note for Agent A
+### Coordination note for Plumber
 
 `apollo.PeopleSearchRequest` does not yet have `OrganizationDomains`.
 `find_gov_contacts` uses a client-side fallback token match against
 `organization.name` for now, with a `TODO(agent-a)` at the single
-swap-in point. When Agent A adds the field, delete the client-side
+swap-in point. When Plumber adds the field, delete the client-side
 filter block and replace with `req.OrganizationDomains =
 []string{cleanDomain(in.Domain)}`.
 
@@ -1119,7 +1119,7 @@ deliberate.
 ### Dispatcher Task 4 — two Anthropic-backed tools
 
 - `tools/search_gov_web.go` — `search_gov_web` tool. Uses the Anthropic
-  Go SDK (`anthropic-sdk-go` v1.37.0, pinned by Agent A) to call
+  Go SDK (`anthropic-sdk-go` v1.37.0, pinned by Plumber) to call
   `claude-opus-4-7` with the server-side web_search tool
   (`WebSearchTool20260209Param` — the current version in the SDK).
   System prompt is the B2G-researcher prompt verbatim; user prompt
@@ -1145,13 +1145,13 @@ deliberate.
   Removed; `SequenceInput.DraftEmail` now references my real type
   (superset of the stub — Subject and Body are present, plus
   `PersonalizationUsed`).
-- **`find_gov_contacts` client-side domain fallback** — Agent A landed
+- **`find_gov_contacts` client-side domain fallback** — Plumber landed
   `OrganizationDomains []string` on `apollo.PeopleSearchRequest`
   (commit `c993d73`). Removed the 13-line client-side token-match
   fallback and the `matchesDomain` helper; the handler now sets
   `req.OrganizationDomains = []string{cleanDomain(in.Domain)}` when a
   domain is provided. One `TODO(agent-a)` eliminated.
-- **`deps.AnthropicKey`** — Agent A added the optional field to
+- **`deps.AnthropicKey`** — Plumber added the optional field to
   `tools.Deps` (commit `b13e8d3`). Switched both Anthropic-backed
   tools from `os.Getenv("ANTHROPIC_API_KEY")` to `deps.AnthropicKey`
   and passed it explicitly via `option.WithAPIKey` — matches the rest
@@ -1313,13 +1313,13 @@ when scoped by `organization_name`/`domain`. The comment at the call
 site documents the empirical shape so future maintainers don't flip
 the check back.
 
-### Coordination — pending Agent A
+### Coordination — pending Plumber
 
 The dispatcher's proposed Bug-1 fix was to add
 `OrgName string json:"q_organization_name,omitempty"` to
 `apollo.PeopleSearchRequest` and filter on that. I can't touch
 `apollo/*` (spec boundary), so my current fallback is the client-side
-substring filter above. When Agent A lands `OrgName`:
+substring filter above. When Plumber lands `OrgName`:
 
 1. In `find_gov_contacts.go`'s search block, replace the
    `partial_errors` note with

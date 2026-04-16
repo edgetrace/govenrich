@@ -1,14 +1,14 @@
-# Agent A — Server Plumbing, Wire-up & Client Prep
+# Plumber — Server Plumbing, Wire-up & Client Prep
 
 ## Role
 
 You own the MCP server scaffolding and a small amount of client prep that
-Agent B depends on. Your job is to bolt the `modelcontextprotocol/go-sdk`
+Craftsman depends on. Your job is to bolt the `modelcontextprotocol/go-sdk`
 onto the existing binary, register one tool, serve it over stdio, and add
-the two `public/*` methods Phase 1 left missing so Agent B can finish the
+the two `public/*` methods Phase 1 left missing so Craftsman can finish the
 enrichment logic end-to-end.
 
-You do **not** implement tool business logic — Agent B owns that in
+You do **not** implement tool business logic — Craftsman owns that in
 `tools/enrich_gov_agency.go`. Your integration surface is a single exported
 symbol you call: `tools.NewEnrichHandler(deps)`.
 
@@ -16,7 +16,7 @@ symbol you call: `tools.NewEnrichHandler(deps)`.
 
 SPEC.md defines four Phase 2 tools (`search_gov_agencies`,
 `enrich_gov_agency`, `score_agency_fit`, `draft_gov_outreach`). This
-spec pair (Agent A + B) covers only **`enrich_gov_agency`** — the
+spec pair (Plumber + B) covers only **`enrich_gov_agency`** — the
 minimum end-to-end demo. The other three tools will be scoped in a
 follow-up spec pair after this one ships.
 
@@ -29,7 +29,7 @@ follow-up spec pair after this one ships.
   placeholder and exits. That branch is yours to replace with the MCP
   server.
 - `SPEC.md` is the product spec; `README.md` is the user-facing doc.
-- Phase 1 found two upstream issues that affect Agent B — you will fix
+- Phase 1 found two upstream issues that affect Craftsman — you will fix
   them in client code before B starts:
   1. FBI CDE `byStateAbbr` does not include `sworn_officers`. Getting
      sworn counts requires a per-ORI call to `/pe/agency/{ori}` which
@@ -50,10 +50,10 @@ follow-up spec pair after this one ships.
 Do not touch `tools/enrich_gov_agency.go`, `apollo/*`, or other files in
 `public/*`.
 
-## Frozen contract (shared with Agent B)
+## Frozen contract (shared with Craftsman)
 
 Drop this in `tools/deps.go` as your first commit. It is the only thing
-Agent B depends on from your side:
+Craftsman depends on from your side:
 
 ```go
 package tools
@@ -71,13 +71,13 @@ type Deps struct {
 }
 ```
 
-Agent B will export, and you will call:
+Craftsman will export, and you will call:
 
 ```go
 tools.NewEnrichHandler(deps) // returns the typed MCP handler
 ```
 
-`EnrichInput` / `EnrichOutput` types live in Agent B's file. If Agent B
+`EnrichInput` / `EnrichOutput` types live in Craftsman's file. If Craftsman
 needs an additional dependency (logger, Anthropic client, timeout config),
 they will ping you to extend `Deps{}` — that is the only coordination
 point.
@@ -94,7 +94,7 @@ go list -m -versions github.com/modelcontextprotocol/go-sdk
 
 Pick the latest non-prerelease tag, run
 `go get github.com/modelcontextprotocol/go-sdk@vX.Y.Z` with that tag, then
-commit `go.mod` + `go.sum` immediately so Agent B resolves the same
+commit `go.mod` + `go.sum` immediately so Craftsman resolves the same
 version. Include the pinned tag in the commit message so it is discoverable
 via `git log`.
 
@@ -104,7 +104,7 @@ Write exactly the struct above. Commit.
 
 ### 3. Add `PoliceEmployeeByORI` to `public/fbi.go`.
 
-Agent B needs sworn officer counts and `byStateAbbr` does not return them.
+Craftsman needs sworn officer counts and `byStateAbbr` does not return them.
 Add (alongside the existing `AgenciesByState`):
 
 ```go
@@ -120,12 +120,12 @@ func (c *FBIClient) PoliceEmployeeByORI(ori string) (int, []byte, error) {
 
 Test the endpoint's real response shape with `curl` before finalizing the
 method — if the field name isn't `sworn_officers`, record the actual key
-in a comment so Agent B can match it.
+in a comment so Craftsman can match it.
 
 ### 4. Stub Census to a documented no-op.
 
 `LocalGovFinance` currently 404s because the SPEC URL does not exist.
-Rather than let Agent B write code against a broken endpoint, add a
+Rather than let Craftsman write code against a broken endpoint, add a
 documented no-op alongside the existing method:
 
 ```go
@@ -139,7 +139,7 @@ func (c *CensusClient) LocalGovFinanceStub(_ string) (int, []byte, error) {
 }
 ```
 
-Leave `LocalGovFinance` in place for `--hello-world` visibility. Agent B
+Leave `LocalGovFinance` in place for `--hello-world` visibility. Craftsman
 will call the stub, not the broken method.
 
 ### 5. Rewire `main.go`.
@@ -189,7 +189,7 @@ will fail to list the tool with no obvious error. Rules:
 go build -o govenrich
 ```
 
-If Agent B hasn't committed yet, this fails at link time on
+If Craftsman hasn't committed yet, this fails at link time on
 `tools.NewEnrichHandler`. That's expected — rebuild after they commit.
 
 Once it builds, verify the server speaks MCP without a client:
@@ -263,7 +263,7 @@ type PeopleSearchRequest struct {
 ```
 
 `q_organization_name` is a real Apollo field — verified live against
-Vallejo PD, returned the Chief of Police. Agent B needs it to fix
+Vallejo PD, returned the Chief of Police. Craftsman needs it to fix
 `find_gov_contacts` domain-filter bug.
 
 Then `go build ./...` and confirm clean. No smoke test needed — this
@@ -328,7 +328,7 @@ mcp.AddTool(srv, &mcp.Tool{
 
 ### A5. Build + smoke test
 
-After Agent B and C commit their files, run:
+After Craftsman and C commit their files, run:
 ```
 go build -o govenrich && \
 (echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}'; sleep 0.5; echo '{"jsonrpc":"2.0","method":"notifications/initialized"}'; sleep 0.5; echo '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'; sleep 1) | ./govenrich 2>/dev/null
@@ -357,7 +357,7 @@ go build -o govenrich && \
 **Re-read this spec tail on every change. Act on new dispatcher tasks immediately.**
 
 Three new tools are being added to the MCP server: `search_gov_agencies`,
-`score_agency_fit`, and `find_gov_contacts`. Agent B owns the tool files.
+`score_agency_fit`, and `find_gov_contacts`. Craftsman owns the tool files.
 Your job is to wire them into `main.go` alongside `enrich_gov_agency`.
 
 ### Task: Register three new tools in `runMCPServer()`
@@ -382,13 +382,13 @@ mcp.AddTool(srv, &mcp.Tool{
 }, tools.NewContactsHandler(deps))
 ```
 
-Agent B will define `NewSearchHandler`, `NewScoreHandler`, and
+Craftsman will define `NewSearchHandler`, `NewScoreHandler`, and
 `NewContactsHandler` in their respective files. Your only job here is the
 `mcp.AddTool` registration.
 
 ### After wiring
 
-1. `go build ./...` — will fail until Agent B commits their files. That's
+1. `go build ./...` — will fail until Craftsman commits their files. That's
    expected. Rebuild after they commit.
 2. Once it builds, run the smoke test:
 ```
@@ -441,16 +441,16 @@ Executed 2026-04-16. All DOD items met; 8 commits landed.
   window) so callers keep the one-arg signature the spec advertises.
 - **Sworn-officer extraction isn't a single field** — CDE returns
   `actuals.Male Officers[year]` and `actuals.Female Officers[year]`
-  separately; Agent B sums them. Field names recorded in the method
+  separately; Craftsman sums them. Field names recorded in the method
   comment per spec §3.
-- **Signature race with Agent B** — their `tools/enrich_gov_agency.go`
+- **Signature race with Craftsman** — their `tools/enrich_gov_agency.go`
   call site oscillated between 1-arg and 3-arg `PoliceEmployeeByORI`
   during the run. Settled on the 1-arg form (matches written spec).
 - **`go.mod` upgraded Go 1.22 → 1.25.0** as a side effect of
   `go get github.com/modelcontextprotocol/go-sdk@v1.5.0` — kept the
   upgrade rather than forcing a downgrade that would drop newer SDK
   features.
-- **`tools/deps.go` untouched since commit 3** — Agent B has not yet
+- **`tools/deps.go` untouched since commit 3** — Craftsman has not yet
   requested any extra dependency, so the frozen contract held.
 
 ### Explicit non-actions
@@ -459,6 +459,6 @@ Executed 2026-04-16. All DOD items met; 8 commits landed.
   or `~/.claude.json`. Both documented in README with a copy/paste block;
   user applies.
 - Did not re-run `--hello-world` (burns Apollo credits and creates a real
-  contact — out of scope for Agent A's DOD).
+  contact — out of scope for Plumber's DOD).
 - Did not modify `apollo/*` or `tools/enrich_gov_agency.go`. The
-  `tools/enrich_gov_agency.go` file on disk is Agent B's responsibility.
+  `tools/enrich_gov_agency.go` file on disk is Craftsman's responsibility.
