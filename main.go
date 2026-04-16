@@ -242,11 +242,12 @@ func main() {
 	fmt.Printf("hello-world complete at %s\n", time.Now().Format(time.RFC3339))
 }
 
-// runMCPServer wires the four HTTP clients into a tools.Deps and serves
-// four tools over stdio: enrich_gov_agency, search_gov_agencies,
-// score_agency_fit, find_gov_contacts. Every log line here must go to
-// stderr — stdout is the JSON-RPC transport and any stray write
-// corrupts it silently.
+// runMCPServer wires the four HTTP clients + optional Anthropic key into
+// a tools.Deps and serves seven tools over stdio: enrich_gov_agency,
+// search_gov_agencies, score_agency_fit, find_gov_contacts,
+// search_gov_web, draft_gov_outreach, create_apollo_sequence. Every log
+// line here must go to stderr — stdout is the JSON-RPC transport and any
+// stray write corrupts it silently.
 func runMCPServer() {
 	// Claude Desktop spawns the binary with CWD=/, so the top-level
 	// godotenv.Load() in main() (which reads from CWD) misses the .env
@@ -265,10 +266,11 @@ func runMCPServer() {
 	}
 
 	deps := tools.Deps{
-		Apollo:      apollo.New(apolloKey, os.Getenv("APOLLO_BASE_URL")),
-		FBI:         public.NewFBIClient(fbiKey),
-		USASpending: public.NewUSASpendingClient(),
-		Census:      public.NewCensusClient(),
+		Apollo:       apollo.New(apolloKey, os.Getenv("APOLLO_BASE_URL")),
+		FBI:          public.NewFBIClient(fbiKey),
+		USASpending:  public.NewUSASpendingClient(),
+		Census:       public.NewCensusClient(),
+		AnthropicKey: os.Getenv("ANTHROPIC_API_KEY"), // optional — handlers check for ""
 	}
 
 	srv := mcp.NewServer(&mcp.Implementation{
@@ -294,6 +296,21 @@ func runMCPServer() {
 		Name:        "find_gov_contacts",
 		Description: "Finds people associated with a government agency via Apollo people search. Returns names, titles, and optionally enriched email addresses.",
 	}, tools.NewContactsHandler(deps))
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "search_gov_web",
+		Description: "Searches the web for city council meeting minutes, agendas, and news to identify key stakeholders and influencers at a government agency.",
+	}, tools.NewWebSearchHandler(deps))
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "draft_gov_outreach",
+		Description: "Drafts a personalized first-touch outreach email for a government agency contact using enriched agency data, fit score, and web research context. Requires sender_name, product, and company.",
+	}, tools.NewDraftHandler(deps))
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "create_apollo_sequence",
+		Description: "Creates an Apollo contact and enrolls them in a sequence. Requires master Apollo API key for sequence enrollment.",
+	}, tools.NewSequenceHandler(deps))
 
 	if err := srv.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		fmt.Fprintln(os.Stderr, "mcp server:", err)
