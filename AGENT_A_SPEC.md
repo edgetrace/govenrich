@@ -244,39 +244,133 @@ mismatches and stray stdout writes are the two bugs that will eat time.
 
 ---
 
-## Dispatcher Task — 2026-04-16
+## Dispatcher Task — Phase 4 — 2026-04-16
 
-**Re-read this section on every spec change. Act on any new dispatcher task immediately.**
+**Re-read this spec tail on every change. Act on new dispatcher tasks immediately.**
 
-**Priority: fix `.env` portability so Claude Desktop can spawn the binary from any working directory.**
+Four changes needed. Do them in order, commit after each.
 
-Current problem: `godotenv.Load()` in `main.go` loads `.env` from CWD. When Claude Desktop spawns the binary it sets CWD to `/`, so `.env` is never found and `runMCPServer()` immediately calls `fatal()` on the missing API keys.
+### A1. Add `OrganizationDomains` to `apollo/client.go`
 
-### Your task
+In `apollo/client.go`, add one field to `PeopleSearchRequest`:
+```go
+OrganizationDomains []string `json:"organization_domains,omitempty"`
+```
 
-1. In `runMCPServer()` in `main.go`, replace `godotenv.Load()` (which is already called in `main()` before the branch) with a load that resolves `.env` relative to the binary's own location:
+### A2. Add Anthropic SDK to `go.mod`
+
+```
+go get github.com/anthropics/anthropic-sdk-go
+```
+Use whatever latest non-prerelease tag exists. Commit go.mod + go.sum with the pinned version in the commit message.
+
+### A3. Add `AnthropicKey` to `tools/deps.go`
 
 ```go
-// Load .env from same directory as the binary, so Claude Desktop can
-// spawn from any CWD.
-if exe, err := os.Executable(); err == nil {
-    _ = godotenv.Load(filepath.Join(filepath.Dir(exe), ".env"))
+type Deps struct {
+    Apollo       *apollo.Client
+    FBI          *public.FBIClient
+    USASpending  *public.USASpendingClient
+    Census       *public.CensusClient
+    AnthropicKey string  // optional — only search_gov_web and draft_gov_outreach need it
 }
 ```
 
-Add `"path/filepath"` to imports. The existing top-level `godotenv.Load()` in `main()` can stay — it handles the dev case where you run from the repo root. The new load in `runMCPServer()` handles the Claude Desktop case.
+### A4. Wire in `main.go`
 
-2. `go build -o govenrich` from repo root. Build must be clean.
+In `runMCPServer()`:
+1. Add to `deps` struct: `AnthropicKey: os.Getenv("ANTHROPIC_API_KEY"),` — do NOT fatal if missing.
+2. Add three new `mcp.AddTool` calls after the existing four:
 
-3. Run the smoke test to confirm the server still speaks MCP:
+```go
+mcp.AddTool(srv, &mcp.Tool{
+    Name:        "search_gov_web",
+    Description: "Searches the web for city council meeting minutes, agendas, and news to identify key stakeholders and influencers at a government agency.",
+}, tools.NewWebSearchHandler(deps))
+
+mcp.AddTool(srv, &mcp.Tool{
+    Name:        "draft_gov_outreach",
+    Description: "Drafts a personalized first-touch outreach email for a government agency contact using enriched agency data, fit score, and web research context. Requires sender_name, product, and company.",
+}, tools.NewDraftHandler(deps))
+
+mcp.AddTool(srv, &mcp.Tool{
+    Name:        "create_apollo_sequence",
+    Description: "Creates an Apollo contact and enrolls them in a sequence. Requires master Apollo API key for sequence enrollment.",
+}, tools.NewSequenceHandler(deps))
+```
+
+### A5. Build + smoke test
+
+After Agent B and C commit their files, run:
+```
+go build -o govenrich && \
+(echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}'; sleep 0.5; echo '{"jsonrpc":"2.0","method":"notifications/initialized"}'; sleep 0.5; echo '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'; sleep 1) | ./govenrich 2>/dev/null
+```
+`tools/list` must return all 7 tools. Append "Latest Build — YYYY-MM-DD HH:MM" to this spec with transcript + PASS/FAIL.
+
+## Latest Build — 2026-04-16
+
+**PASS.** `go build -o govenrich` clean. `tools/list` returns 7 tools:
+`create_apollo_sequence`, `draft_gov_outreach`, `enrich_gov_agency`,
+`find_gov_contacts`, `score_agency_fit`, `search_gov_agencies`,
+`search_gov_web`. Binary at `/Users/admin/edgetrace-gtm/govenrich`.
+
+### Phase 4 work completed
+
+- `apollo/client.go` — added `OrganizationDomains []string` to `PeopleSearchRequest`
+- `go.mod` — pinned `github.com/anthropics/anthropic-sdk-go v1.37.0`
+- `tools/deps.go` — added `AnthropicKey string` (optional, documented)
+- `main.go` — wired `AnthropicKey` from env (non-fatal if missing) +
+  registered `search_gov_web`, `draft_gov_outreach`, `create_apollo_sequence`
+
+---
+
+## Dispatcher Task — Phase 3 — 2026-04-16
+
+**Re-read this spec tail on every change. Act on new dispatcher tasks immediately.**
+
+Three new tools are being added to the MCP server: `search_gov_agencies`,
+`score_agency_fit`, and `find_gov_contacts`. Agent B owns the tool files.
+Your job is to wire them into `main.go` alongside `enrich_gov_agency`.
+
+### Task: Register three new tools in `runMCPServer()`
+
+In `main.go`, in `runMCPServer()`, add three `mcp.AddTool` calls after the
+existing `enrich_gov_agency` one:
+
+```go
+mcp.AddTool(srv, &mcp.Tool{
+    Name:        "search_gov_agencies",
+    Description: "Searches for US law-enforcement agencies in a state, ranked by ICP fit score. Returns merged Apollo + FBI records with sworn officer counts Apollo is missing.",
+}, tools.NewSearchHandler(deps))
+
+mcp.AddTool(srv, &mcp.Tool{
+    Name:        "score_agency_fit",
+    Description: "Scores a single enriched agency against the Pleasanton PD ICP profile. Returns 0-100 fit score and reasoning strings. No external API calls.",
+}, tools.NewScoreHandler(deps))
+
+mcp.AddTool(srv, &mcp.Tool{
+    Name:        "find_gov_contacts",
+    Description: "Finds people associated with a government agency via Apollo people search. Returns names, titles, and optionally enriched email addresses.",
+}, tools.NewContactsHandler(deps))
+```
+
+Agent B will define `NewSearchHandler`, `NewScoreHandler`, and
+`NewContactsHandler` in their respective files. Your only job here is the
+`mcp.AddTool` registration.
+
+### After wiring
+
+1. `go build ./...` — will fail until Agent B commits their files. That's
+   expected. Rebuild after they commit.
+2. Once it builds, run the smoke test:
 ```
 (echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}'; sleep 0.5; echo '{"jsonrpc":"2.0","method":"notifications/initialized"}'; sleep 0.5; echo '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'; sleep 1) | ./govenrich 2>/dev/null
 ```
-Expect two clean JSON-RPC responses. `tools/list` must return `enrich_gov_agency`.
-
-4. Append a "Latest Build — YYYY-MM-DD HH:MM" section to this spec with the smoke test transcript and PASS/FAIL.
-
-5. Copy the `.env` file to sit alongside the binary: `cp .env govenrich.env` — no wait, instead just confirm the `.env` already lives at `/Users/admin/edgetrace-gtm/.env` next to the binary at `/Users/admin/edgetrace-gtm/govenrich`. If yes, the `filepath.Dir(exe)` approach resolves correctly and no file copy is needed.
+3. `tools/list` must return all four tools: `enrich_gov_agency`,
+   `search_gov_agencies`, `score_agency_fit`, `find_gov_contacts`.
+4. Append "Latest Build — YYYY-MM-DD HH:MM" to this spec with the
+   smoke test transcript and PASS/FAIL.
 
 ---
 
@@ -341,56 +435,3 @@ Executed 2026-04-16. All DOD items met; 8 commits landed.
   contact — out of scope for Agent A's DOD).
 - Did not modify `apollo/*` or `tools/enrich_gov_agency.go`. The
   `tools/enrich_gov_agency.go` file on disk is Agent B's responsibility.
-
----
-
-## Latest Build — 2026-04-16 20:17 UTC
-
-**Dispatcher task**: fix `.env` portability for Claude Desktop (spawns with
-CWD=`/`). **Result: PASS.**
-
-### Change
-
-`main.go` imports gain `"path/filepath"`. `runMCPServer()` now loads
-`.env` from the binary's own directory in addition to the top-level
-`main()` load:
-
-```go
-if exe, err := os.Executable(); err == nil {
-    _ = godotenv.Load(filepath.Join(filepath.Dir(exe), ".env"))
-}
-```
-
-Top-level `godotenv.Load()` in `main()` is intact, so running from the
-repo root still works for dev.
-
-### Layout confirmation
-
-`.env` lives at `/Users/admin/edgetrace-gtm/.env` next to the binary at
-`/Users/admin/edgetrace-gtm/govenrich` — `filepath.Dir(exe)` resolves
-to the same directory. No file copy needed.
-
-### Smoke test transcript
-
-**Test 1** — repo-root CWD (control):
-
-```
-$ (echo init; sleep 0.5; echo initialized; sleep 0.5; echo tools/list; sleep 1) | ./govenrich 2>/dev/null
-[1] id=1 init OK, serverInfo={'name': 'govenrich', 'version': '0.1.0'}, protocol=2025-11-25
-[2] id=2 tools/list OK, tools=['enrich_gov_agency']
-```
-
-**Test 2** — `/tmp` CWD (portability proof, simulates Claude Desktop):
-
-```
-$ cd /tmp && (echo init; sleep 0.5; echo initialized; sleep 0.5; echo tools/list; sleep 1) | /Users/admin/edgetrace-gtm/govenrich 2>/dev/null
-[1] id=1 init OK, serverInfo={'name': 'govenrich', 'version': '0.1.0'}, protocol=2025-11-25
-[2] id=2 tools/list OK, tools=['enrich_gov_agency']
-```
-
-Before the fix Test 2 would have died on `fatal("APOLLO_API_KEY missing")`
-because the top-level `godotenv.Load()` found no `.env` in `/tmp`. After
-the fix, `runMCPServer()` loads `.env` from `/Users/admin/edgetrace-gtm/`
-regardless of CWD and both tests return a clean `tools/list`.
-
-
