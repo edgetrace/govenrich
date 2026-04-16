@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "govenrich-stub": {
+      "command": "/ABSOLUTE/PATH/TO/edgetrace-gtm/stub/govenrich-stub"
+    },
+    "_govenrich_real_pending": {
+      "_comment": "Uncomment and rename to govenrich when Agent A ships. Remove the leading underscore from the key name and delete this _comment field — Claude Desktop rejects unknown top-level fields on active entries.",
+      "command": "/ABSOLUTE/PATH/TO/edgetrace-gtm/govenrich",
+      "env": {
+        "APOLLO_API_KEY": "REPLACE_ME",
+        "FBI_CDE_API_KEY": "REPLACE_ME"
+      }
+    }
+  }
+}
