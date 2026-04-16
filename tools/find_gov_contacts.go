@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/edgetrace/govenrich/apollo"
@@ -104,8 +105,18 @@ func NewContactsHandler(deps Deps) func(
 			PerPage:   limit,
 			Page:      1,
 		}
+		// Live probe (2026-04-16): `organization_domains` is silently
+		// ignored by Apollo's /mixed_people/api_search for .gov domains
+		// and returns unrelated Fortune-500 executives. We keep accepting
+		// the `Domain` input so the tool contract doesn't churn, but we
+		// do not pass it upstream. The cleaner fix is to filter by
+		// `q_organization_name`, which needs an OrgName field on
+		// apollo.PeopleSearchRequest — TODO(agent-a) to add it, then
+		// swap in here. Until then we narrow post-hoc on agency-name
+		// substring match of the returned organization.name.
 		if in.Domain != "" {
-			req.OrganizationDomains = []string{cleanDomain(in.Domain)}
+			out.PartialErrors = append(out.PartialErrors,
+				"apollo: organization_domains filter is silently ignored for .gov — falling back to title+state search, narrowed client-side on agency-name substring")
 		}
 
 		status, body, err := deps.Apollo.PeopleSearch(req)
@@ -122,6 +133,26 @@ func NewContactsHandler(deps Deps) func(
 		if len(contacts) == 0 {
 			out.PartialErrors = append(out.PartialErrors, "apollo people_search: no contacts matched")
 			return nil, out, nil
+		}
+
+		// Client-side narrowing: match the requested agency name against
+		// the Apollo organization.name substring. Apollo's LE-title search
+		// across a whole state returns contacts from many agencies; the
+		// dumb substring match on a distinctive token recovers a precision
+		// pass that organization_domains should have given us server-side.
+		if token := strings.ToLower(distinctiveKeyword(in.AgencyName)); token != "" {
+			narrowed := make([]ContactResult, 0, len(contacts))
+			for _, c := range contacts {
+				if strings.Contains(strings.ToLower(c.Organization), token) {
+					narrowed = append(narrowed, c)
+				}
+			}
+			if len(narrowed) > 0 {
+				contacts = narrowed
+			} else {
+				out.PartialErrors = append(out.PartialErrors,
+					fmt.Sprintf("apollo: no contacts with %q in organization.name — returning the broader state+title matches", token))
+			}
 		}
 
 		if len(contacts) > limit {
@@ -216,7 +247,11 @@ func enrichEmails(cli *apollo.Client, contacts []ContactResult, hintDomain strin
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			c := &contacts[idx]
-			if c.FirstName == "" || c.LastName == "" {
+			// Apollo frequently returns only first_name for gov
+			// contacts (last_name = null). PeopleMatch accepts partial
+			// names when scoped by organization, so skip only if both
+			// names are missing.
+			if c.FirstName == "" && c.LastName == "" {
 				return
 			}
 			req := apollo.PeopleMatchRequest{

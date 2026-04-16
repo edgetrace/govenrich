@@ -242,6 +242,62 @@ precision can come in a later iteration.
 
 ---
 
+## Dispatcher Task 5 — fix find_gov_contacts — 2026-04-16
+
+**Re-read this spec tail on every change. Act immediately.**
+
+Two bugs found via live Apollo probe on Vallejo PD.
+
+### Bug 1 — `organization_domains` filter doesn't work
+
+Passing `organization_domains: ["vallejopd.net"]` to Apollo's
+`/mixed_people/api_search` returns completely unrelated people (Sony,
+Experian IT directors). Apollo silently ignores the domain filter for
+`.gov` domains.
+
+**Fix in `tools/find_gov_contacts.go`:** Replace the domain-filter
+strategy with `q_organization_name` search instead. In `resolveContacts`
+(or wherever `PeopleSearch` is called), add `Q` field to the search:
+
+Check `apollo/client.go` — `OrgSearchRequest` has no `Q` field on
+`PeopleSearchRequest`. You need Agent A to add it, OR work around it
+by passing the agency name via a different field. Check if Apollo's
+`/mixed_people/api_search` accepts `q_organization_name` as a body
+field — it does (verified in live test). Add to `apollo.PeopleSearchRequest`:
+
+```go
+OrgName string `json:"q_organization_name,omitempty"`
+```
+
+Ping Agent A to add this field to `apollo/client.go`. Then in
+`find_gov_contacts.go`, populate it with `in.AgencyName` when searching.
+Remove `OrganizationDomains` from the search request — it doesn't work
+for `.gov` orgs.
+
+### Bug 2 — `last_name` is null, draft gets placeholder
+
+Apollo returns `first_name` only for government contacts — `last_name`
+is `null`. The draft email gets `[Chief/Commander's name]` placeholder.
+
+**Fix in `tools/find_gov_contacts.go`:** In `parsePeople`, when
+`last_name` is empty, set `LastName` to the title-cased org abbreviation
+or leave it empty — but ensure `FirstName` alone is passed to
+`draft_gov_outreach` so the draft can use "Hi Jason," instead of a
+placeholder.
+
+Also fix `enrichEmails` — it currently skips `PeopleMatch` when
+`LastName == ""` (line ~219). Relax this: if `FirstName` is non-empty,
+attempt `PeopleMatch` with just first name + org name. Apollo's match
+endpoint accepts partial names.
+
+### After both fixes
+
+1. `go build ./...` clean
+2. Smoke test — all 7 tools in `tools/list`
+3. Append "Latest Build — YYYY-MM-DD HH:MM" with PASS/FAIL
+
+---
+
 ## Dispatcher Task 4 — Phase 4 tools — 2026-04-16
 
 **Re-read this spec tail on every change. Act on new dispatcher tasks immediately.**
@@ -1185,3 +1241,110 @@ it into the email and into `PersonalizationUsed`. PASS.
       `find_gov_contacts` now uses server-side `OrganizationDomains`,
       both new handlers use `deps.AnthropicKey` via
       `option.WithAPIKey`.
+
+---
+
+## Latest Build — 2026-04-16 22:05 UTC
+
+`go build ./...` clean. `go vet ./...` clean. PASS.
+
+### Dispatcher Task 5 — find_gov_contacts bugs
+
+**Bug 1 — `organization_domains` filter silently ignored for .gov.**
+Live probe against Apollo with
+`organization_domains: ["pleasantonpd.org"]` returned five Fortune-500
+execs (Intempo Health CGO, Breakthrough Energy founder, Hyundai GM
+purchase, Hina Group MD, EY client-services director) — completely
+unrelated to Pleasanton PD. Apollo drops the filter silently on .gov
+domains rather than erroring.
+
+Previous build (commit `1fbf2ce`) set
+`req.OrganizationDomains = []string{cleanDomain(in.Domain)}` when a
+domain was provided — so callers who passed a .gov domain got the
+broken filter's noise. That block is now removed. Instead:
+
+- The `Domain` input is still accepted (tool contract doesn't churn)
+  but not passed upstream. A note lands in `partial_errors`:
+  `"apollo: organization_domains filter is silently ignored for .gov
+  — falling back to title+state search, narrowed client-side on
+  agency-name substring"`.
+- After Apollo's broad title+state response lands, results are
+  filtered client-side by substring-matching `distinctiveKeyword(AgencyName)`
+  (lowercased) against each hit's `organization.name`.
+- When the substring filter produces zero matches, the handler surfaces
+  a second note (`"apollo: no contacts with X in organization.name —
+  returning the broader state+title matches"`) and returns the broader
+  set rather than an empty list — the model can narrate the limitation.
+
+**Live test — Pleasanton PD (`domain: pleasantonpd.org`):**
+
+```
+contacts:       5
+sources:        ["apollo"]
+partial_errors: [
+  "apollo: organization_domains filter is silently ignored for .gov
+   — falling back to title+state search, narrowed client-side on
+   agency-name substring",
+  "apollo: no contacts with \"pleasanton police\" in organization.name
+   — returning the broader state+title matches"
+]
+  Joe   | City Council Member, Mayor    | City of Eastvale, CA
+  Cary  | Mayor, City Council Member    | Town Of Atherton
+  Sara  | City Council Member + Mayor   | City of San Carlos
+  Belal | City Council Member           | City of Saratoga
+  Josh  | City Council Member           | City of Canyon Lake
+```
+
+Cross-checked against LAPD: same substring-miss behavior (Apollo's
+gov coverage is genuinely sparse — not a tool bug). The two-note
+transparency lets the model narrate "Apollo doesn't have LAPD
+contacts indexed, here are nearby CA city leaders instead."
+
+**Bug 2 — `enrichEmails` skipped every contact with `last_name: null`.**
+Apollo returns `last_name: null` for most gov contacts (confirmed on
+the same probe — every row had `(nil)` in the last-name column). The
+prior guard `if c.FirstName == "" || c.LastName == ""` meant
+PeopleMatch was never attempted, so `enrich_email: true` silently
+produced zero emails for the entire gov ICP.
+
+Changed to `if c.FirstName == "" && c.LastName == ""` — skip only when
+both names are missing. Apollo's /people/match accepts partial names
+when scoped by `organization_name`/`domain`. The comment at the call
+site documents the empirical shape so future maintainers don't flip
+the check back.
+
+### Coordination — pending Agent A
+
+The dispatcher's proposed Bug-1 fix was to add
+`OrgName string json:"q_organization_name,omitempty"` to
+`apollo.PeopleSearchRequest` and filter on that. I can't touch
+`apollo/*` (spec boundary), so my current fallback is the client-side
+substring filter above. When Agent A lands `OrgName`:
+
+1. In `find_gov_contacts.go`'s search block, replace the
+   `partial_errors` note with
+   `req.OrgName = in.AgencyName` when `in.Domain` or `in.AgencyName`
+   is present.
+2. Keep the client-side substring narrowing as a defense-in-depth —
+   Apollo's `q_organization_name` is also permissive (probe with
+   `q_organization_name: "Pleasanton"` returned hotels and weekly
+   papers, not the PD).
+
+### Status against DoD
+
+- [x] `go build ./...` clean.
+- [x] `tools/list` returns all 7 tools.
+- [x] `find_gov_contacts` no longer passes the broken
+      `organization_domains` filter; narrows client-side on agency-name
+      substring; surfaces the limitation in `partial_errors`.
+- [x] `enrichEmails` attempts PeopleMatch for contacts with first-name
+      only, matching Apollo's real gov payload shape.
+- [x] No edits outside `tools/` — file boundary respected.
+
+### Known residual gap
+
+Apollo's gov-contact coverage is genuinely sparse — even LAPD returns
+zero substring matches on `"los angeles police"`. No amount of filter
+tuning recovers data Apollo doesn't have. For LE-specific contact
+enrichment, the next-level play is probably FBI CDE's leadership
+endpoint or LinkedIn scraping, both outside this tool's scope.
