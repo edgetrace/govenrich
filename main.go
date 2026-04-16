@@ -8,6 +8,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -17,7 +18,9 @@ import (
 
 	"github.com/edgetrace/govenrich/apollo"
 	"github.com/edgetrace/govenrich/public"
+	"github.com/edgetrace/govenrich/tools"
 	"github.com/joho/godotenv"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 const (
@@ -33,7 +36,7 @@ func main() {
 	_ = godotenv.Load()
 
 	if !*helloWorld {
-		fmt.Println("govenrich — Phase 1 build. Run with --hello-world to verify external API connectivity. MCP transport not yet wired.")
+		runMCPServer()
 		return
 	}
 
@@ -236,6 +239,42 @@ func main() {
 
 	fmt.Println()
 	fmt.Printf("hello-world complete at %s\n", time.Now().Format(time.RFC3339))
+}
+
+// runMCPServer wires the four HTTP clients into a tools.Deps and serves
+// the single enrich_gov_agency tool over stdio. Every log line here must
+// go to stderr — stdout is the JSON-RPC transport and any stray write
+// corrupts it silently.
+func runMCPServer() {
+	apolloKey := os.Getenv("APOLLO_API_KEY")
+	if apolloKey == "" {
+		fatal("APOLLO_API_KEY missing — copy .env.example to .env and fill it in")
+	}
+	fbiKey := os.Getenv("FBI_CDE_API_KEY")
+	if fbiKey == "" {
+		fatal("FBI_CDE_API_KEY missing — free key at https://api.data.gov/signup")
+	}
+
+	deps := tools.Deps{
+		Apollo:      apollo.New(apolloKey, os.Getenv("APOLLO_BASE_URL")),
+		FBI:         public.NewFBIClient(fbiKey),
+		USASpending: public.NewUSASpendingClient(),
+		Census:      public.NewCensusClient(),
+	}
+
+	srv := mcp.NewServer(&mcp.Implementation{
+		Name:    "govenrich",
+		Version: "0.1.0",
+	}, nil)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "enrich_gov_agency",
+		Description: "Enriches a US law-enforcement agency with sworn officer count and active federal grants — fills the Apollo gap on .gov domains.",
+	}, tools.NewEnrichHandler(deps))
+
+	if err := srv.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
+		fmt.Fprintln(os.Stderr, "mcp server:", err)
+		os.Exit(1)
+	}
 }
 
 // ---- reporting & parsing helpers ---------------------------------------
