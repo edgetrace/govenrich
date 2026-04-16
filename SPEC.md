@@ -162,19 +162,21 @@ FBI CDE and Census calls immediately after demonstrate what GovEnrich fills.
 ## Apollo API Endpoints
 
 **Base URL:** `https://api.apollo.io/api/v1`  
-**Auth:** `Authorization: Bearer {APOLLO_API_KEY}` on all requests  
+**Auth:** `X-Api-Key: {APOLLO_API_KEY}` on all requests. Apollo rejects
+`Authorization: Bearer …` with an explicit error.  
 **Content-Type:** `application/json`  
 **Note:** Steps 7 and 8 require a master API key, not a standard key.
 
 ---
 
-### 1. Health Check
+### 1. Health Check ⚠ deprecated — endpoint 404s
 ```
 POST /auth/health
 Body: {}
 ```
-Fail fast here before burning credits on a bad key.  
-Expected: `200 OK`
+This endpoint no longer exists in current Apollo deployments. Use a
+successful `/mixed_companies/search` (step 2) as the key-validity signal
+instead. Phase 1 hello-world skips step 1.
 
 ---
 
@@ -325,7 +327,7 @@ Capture: `results[].Recipient Name`, `.Award Amount`, `.Awarding Agency`
 
 ---
 
-### 11. Census Local Government Finance
+### 11. Census Local Government Finance ⚠ URL wrong — needs rebuild
 Annual expenditure by govt entity. Proxy for tech budget capacity.  
 **No key required.**
 
@@ -336,6 +338,11 @@ GET https://api.census.gov/data/2022/govfinances
     &in=state:06
 ```
 (`state:06` = California FIPS)
+
+**This URL returns 404.** Census government finance is published under the
+`timeseries` collection (e.g. `/data/timeseries/govs/*`), not as a 2022
+annual endpoint. Exact dataset and field mapping TBD — Phase 1 hello-world
+leaves this call in place as a ✗ marker until the correct dataset is chosen.
 
 Capture rows where `FUNCTION=05` (Police Protection) or `FUNCTION=61`
 (Capital Outlay). Join to FBI data on city name.

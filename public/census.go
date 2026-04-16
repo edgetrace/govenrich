@@ -8,6 +8,9 @@ import (
 	"time"
 )
 
+// TODO(spec): this URL returns 404. Census government finance is published
+// under the timeseries collection (e.g. /data/timeseries/govs/*), not as a
+// 2022 annual endpoint. Exact dataset TBD — see SPEC.md §11 for the gap.
 const CensusGovFinanceURL = "https://api.census.gov/data/2022/govfinances"
 
 type CensusClient struct {

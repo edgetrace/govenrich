@@ -45,7 +45,8 @@ func (c *Client) do(method, path string, body any) (int, []byte, error) {
 	if err != nil {
 		return 0, nil, fmt.Errorf("new request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	// Apollo rejects Authorization: Bearer and requires the X-Api-Key header.
+	req.Header.Set("X-Api-Key", c.APIKey)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Cache-Control", "no-cache")
@@ -62,12 +63,11 @@ func (c *Client) do(method, path string, body any) (int, []byte, error) {
 	return resp.StatusCode, data, nil
 }
 
-// 1. POST /auth/health
-func (c *Client) Health() (int, []byte, error) {
-	return c.do(http.MethodPost, "/auth/health", map[string]any{})
-}
+// SPEC.md step 1 (/auth/health) is omitted: the endpoint returns 404 in
+// current Apollo deployments. A successful /mixed_companies/search is the
+// real key-validity signal.
 
-// 2. POST /mixed_companies/search — ⚠ consumes credits
+// POST /mixed_companies/search — ⚠ consumes credits
 type OrgSearchRequest struct {
 	KeywordTags []string `json:"q_organization_keyword_tags,omitempty"`
 	Locations   []string `json:"organization_locations,omitempty"`
