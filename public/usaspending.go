@@ -20,10 +20,10 @@ func NewUSASpendingClient() *USASpendingClient {
 }
 
 type USASpendingFilters struct {
-	AwardTypeCodes               []string                 `json:"award_type_codes,omitempty"`
-	RecipientSearchText          []string                 `json:"recipient_search_text,omitempty"`
-	TimePeriod                   []USASpendingTimePeriod  `json:"time_period,omitempty"`
-	PlaceOfPerformanceLocations  []map[string]string      `json:"place_of_performance_locations,omitempty"`
+	AwardTypeCodes              []string                `json:"award_type_codes,omitempty"`
+	RecipientSearchText         []string                `json:"recipient_search_text,omitempty"`
+	TimePeriod                  []USASpendingTimePeriod `json:"time_period,omitempty"`
+	PlaceOfPerformanceLocations []map[string]string     `json:"place_of_performance_locations,omitempty"`
 }
 
 type USASpendingTimePeriod struct {
